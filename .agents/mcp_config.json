@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "powerpoint-mcp": {
+      "command": "uv",
+      "args": [
+        "run",
+        "python",
+        "-m",
+        "powerpoint_mcp.server"
+      ],
+      "env": {
+        "PPT_RENDERER": "auto",
+        "PPT_WORKSPACE_DIR": ".ppt-agent",
+        "PPT_BACKUP_ENABLED": "true",
+        "PPT_DEFAULT_OUTPUT_DIR": "./output"
+      }
+    }
+  }
+}

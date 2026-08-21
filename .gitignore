@@ -1,0 +1,41 @@
+# Python virtual environment
+.venv/
+env/
+venv/
+ENV/
+
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# Build & packaging artifacts
+build/
+dist/
+*.egg-info/
+*.egg
+eggs/
+.eggs/
+
+# PowerPoint MCP working directory & artifacts
+.ppt-agent/
+renders/
+diffs/
+backups/
+
+# Operating system files
+.DS_Store
+Thumbs.db
+*.tmp
+*.log
+
+# IDE & Editor files
+.idea/
+.vscode/
+*.swp
+*.swo

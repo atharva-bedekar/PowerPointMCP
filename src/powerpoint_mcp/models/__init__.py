@@ -1,0 +1,55 @@
+﻿"""Data models and conversion utilities for PowerPoint MCP."""
+
+from powerpoint_mcp.models.shape import (
+    AlignmentType,
+    BoundingBox,
+    DistributionMode,
+    EMU_PER_CM,
+    EMU_PER_INCH,
+    EMU_PER_POINT,
+    ParagraphModel,
+    POINTS_PER_INCH,
+    SemanticRole,
+    ShapeModel,
+    ShapeType,
+    SpacingMode,
+    TextFrameModel,
+    TextRunModel,
+    TextStyle,
+    apply_delta_inches,
+    emu_to_inches,
+    emu_to_pt,
+    inches_to_emu,
+    pt_to_emu,
+)
+from powerpoint_mcp.models.slide import SlideModel
+from powerpoint_mcp.models.presentation import (
+    PresentationMetadata,
+    PresentationModel,
+)
+
+__all__ = [
+    "AlignmentType",
+    "BoundingBox",
+    "DistributionMode",
+    "EMU_PER_CM",
+    "EMU_PER_INCH",
+    "EMU_PER_POINT",
+    "ParagraphModel",
+    "POINTS_PER_INCH",
+    "PresentationMetadata",
+    "PresentationModel",
+    "SemanticRole",
+    "ShapeModel",
+    "ShapeType",
+    "SlideModel",
+    "SpacingMode",
+    "TextFrameModel",
+    "TextRunModel",
+    "TextStyle",
+    "apply_delta_inches",
+    "emu_to_inches",
+    "emu_to_pt",
+    "inches_to_emu",
+    "pt_to_emu",
+]

@@ -1,0 +1,1 @@
+"""PowerPoint MCP test suite."""

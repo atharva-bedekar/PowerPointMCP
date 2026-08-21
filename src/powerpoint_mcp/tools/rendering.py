@@ -1,0 +1,295 @@
+"""Rendering and visual comparison tools for PowerPoint MCP server."""
+
+from datetime import datetime, timezone
+from functools import wraps
+import os
+from pathlib import Path
+import traceback
+from typing import Any, Dict, List, Optional, Union
+
+from PIL import Image, ImageDraw, ImageFont
+
+from powerpoint_mcp.pptx.inspector import inspect_slide
+from powerpoint_mcp.rendering.image_diff import VisualDiffResult, visual_diff
+from powerpoint_mcp.rendering.renderer import (
+    BaseRenderer,
+    NullRenderer,
+    PowerPointRenderer,
+    get_available_renderer,
+)
+from powerpoint_mcp.tools.inspection import handle_tool_errors
+from powerpoint_mcp.tools.versioning import get_session_manager
+from powerpoint_mcp.utils.paths import get_session_renders_dir
+
+
+def _iso_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _resolve_presentation_path(presentation_path: Optional[str] = None) -> str:
+    """Resolve presentation path from argument or active session."""
+    if presentation_path:
+        p = Path(presentation_path).resolve()
+        if not p.exists():
+            raise FileNotFoundError(f"Presentation file not found: {p}")
+        return str(p)
+
+    mgr = get_session_manager()
+    session = mgr.get_current_session()
+    if session and session.working_path and Path(session.working_path).exists():
+        return str(Path(session.working_path).resolve())
+
+    raise ValueError("No presentation path provided and no active editing session found. Please call ppt_open first.")
+
+
+def _render_pillow_fallback(
+    presentation_path: str,
+    slide_number: int,
+    output_path: Path,
+    width: int = 1920,
+    height: int = 1080,
+) -> str:
+    """Fallback programmatic slide visualizer using Pillow when COM/LibreOffice are unavailable."""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    img = Image.new("RGB", (width, height), color=(255, 255, 255))
+    draw = ImageDraw.Draw(img)
+
+    try:
+        slide_model = inspect_slide(presentation_path, slide_number)
+        scale_x = width / max(slide_model.width_inches, 1.0)
+        scale_y = height / max(slide_model.height_inches, 1.0)
+
+        # Draw slide background frame
+        draw.rectangle([0, 0, width - 1, height - 1], outline=(200, 200, 200), width=2)
+
+        # Draw shapes
+        for shape in slide_model.shapes:
+            sx = int(round(shape.bounds.left_inches * scale_x))
+            sy = int(round(shape.bounds.top_inches * scale_y))
+            sw = int(round(shape.bounds.width_inches * scale_x))
+            sh = int(round(shape.bounds.height_inches * scale_y))
+
+            box = [sx, sy, sx + sw, sy + sh]
+
+            # Background color
+            fill_color = (235, 240, 248)
+            if shape.fill and shape.fill.get("color_rgb"):
+                hex_c = shape.fill["color_rgb"].lstrip("#")
+                if len(hex_c) == 6:
+                    try:
+                        fill_color = (int(hex_c[:2], 16), int(hex_c[2:4], 16), int(hex_c[4:], 16))
+                    except Exception:
+                        pass
+
+            draw.rectangle(box, fill=fill_color, outline=(100, 120, 150), width=2)
+
+            # Draw label / text
+            text = (shape.text_frame.text if shape.text_frame else shape.name or "").strip()
+            if text:
+                draw.text((sx + 8, sy + 8), text[:80], fill=(20, 20, 20))
+
+    except Exception:
+        # Fallback text banner
+        draw.rectangle([50, 50, width - 50, height - 50], outline=(180, 180, 180), width=2)
+        draw.text((100, 100), f"Slide {slide_number} (Pillow Synthetic Render)", fill=(50, 50, 50))
+
+    img.save(str(output_path), format="PNG")
+    return str(output_path)
+
+
+@handle_tool_errors
+def ppt_render_slide(
+    slide_number: int,
+    output_dir: Optional[str] = None,
+    output_path: Optional[str] = None,
+    renderer: str = "auto",
+    dpi: int = 150,
+    presentation_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Render a single slide to a high-resolution PNG image.
+
+    Uses Windows PowerPoint COM automation when available, falling back to LibreOffice headless or Pillow.
+
+    Args:
+        slide_number: 1-indexed slide number.
+        output_dir: Output directory path. If omitted, saves inside active session renders directory.
+        output_path: Direct output PNG file path.
+        renderer: Preferred renderer engine ('auto', 'powerpoint', 'libreoffice', 'none', 'mock').
+        dpi: Render resolution DPI (default 150).
+        presentation_path: Path to presentation file. If omitted, uses active session.
+
+    Returns:
+        Structured dictionary containing rendered image_path, slide_number, renderer name, and pixel dimensions.
+    """
+    if slide_number < 1:
+        raise IndexError(f"Slide number must be >= 1, got {slide_number}")
+
+    target_path = _resolve_presentation_path(presentation_path)
+    mgr = get_session_manager()
+    session = mgr.get_current_session()
+
+    # Determine destination image path
+    if output_path:
+        out_file = Path(output_path).resolve()
+    elif output_dir:
+        out_file = Path(output_dir).resolve() / f"slide_{slide_number}.png"
+    elif session:
+        renders_dir = get_session_renders_dir(session.session_id, mgr.workspace_dir.parent)
+        renders_dir.mkdir(parents=True, exist_ok=True)
+        out_file = renders_dir / f"slide_{slide_number}.png"
+    else:
+        out_file = Path("./renders").resolve() / f"slide_{slide_number}.png"
+
+    out_file.parent.mkdir(parents=True, exist_ok=True)
+
+    # Pixel dimensions scaled by DPI
+    # Standard 16:9 base: 13.333" x 7.5"
+    width_px = int(round(13.333 * dpi))
+    height_px = int(round(7.5 * dpi))
+
+    renderer_used = "powerpoint_com"
+    renderer_obj = get_available_renderer(preferred=renderer)
+
+    if renderer.lower() in ("mock", "pillow"):
+        _render_pillow_fallback(target_path, slide_number, out_file, width_px, height_px)
+        renderer_used = "mock"
+    elif renderer_obj.is_available:
+        try:
+            renderer_obj.render_slide(
+                target_path,
+                slide_number,
+                out_file,
+                width=width_px,
+                height=height_px,
+            )
+            renderer_used = renderer_obj.renderer_name
+        except Exception as exc:
+            # Fallback to pillow render
+            _render_pillow_fallback(target_path, slide_number, out_file, width_px, height_px)
+            renderer_used = f"{renderer_obj.renderer_name}_fallback"
+    else:
+        _render_pillow_fallback(target_path, slide_number, out_file, width_px, height_px)
+        renderer_used = "pillow_fallback"
+
+    # Update session renders record
+    if session:
+        session.renders.append({
+            "slide_number": slide_number,
+            "render_path": str(out_file),
+            "renderer": renderer_used,
+            "timestamp": _iso_now(),
+        })
+        session.save_metadata()
+
+    return {
+        "success": True,
+        "image_path": str(out_file),
+        "slide_number": slide_number,
+        "renderer": renderer_used,
+        "width_px": width_px,
+        "height_px": height_px,
+    }
+
+
+@handle_tool_errors
+def ppt_render_presentation(
+    output_dir: Optional[str] = None,
+    renderer: str = "auto",
+    dpi: int = 150,
+    presentation_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Render all slides in a presentation to PNG images.
+
+    Args:
+        output_dir: Target output directory for PNG slide renders.
+        renderer: Renderer preference ('auto', 'powerpoint', 'libreoffice', 'mock').
+        dpi: Output resolution DPI (default 150).
+        presentation_path: Path to presentation. If omitted, uses active session.
+
+    Returns:
+        Structured dictionary listing rendered slide paths and total slide count.
+    """
+    target_path = _resolve_presentation_path(presentation_path)
+    mgr = get_session_manager()
+    session = mgr.get_current_session()
+
+    if output_dir:
+        out_dir_path = Path(output_dir).resolve()
+    elif session:
+        out_dir_path = get_session_renders_dir(session.session_id, mgr.workspace_dir.parent)
+    else:
+        out_dir_path = Path("./renders").resolve()
+
+    out_dir_path.mkdir(parents=True, exist_ok=True)
+
+    from pptx import Presentation
+    prs = Presentation(target_path)
+    slide_count = len(prs.slides)
+
+    rendered_slides: List[Dict[str, Any]] = []
+    renderer_name = "powerpoint_com"
+
+    for i in range(1, slide_count + 1):
+        res = ppt_render_slide(
+            slide_number=i,
+            output_dir=str(out_dir_path),
+            renderer=renderer,
+            dpi=dpi,
+            presentation_path=target_path,
+        )
+        if res.get("success"):
+            rendered_slides.append({
+                "slide_number": i,
+                "image_path": res.get("image_path"),
+            })
+            renderer_name = res.get("renderer", renderer_name)
+
+    return {
+        "success": True,
+        "slide_count": len(rendered_slides),
+        "rendered_slides": rendered_slides,
+        "renderer": renderer_name,
+    }
+
+
+@handle_tool_errors
+def ppt_visual_diff(
+    before_image: str,
+    after_image: str,
+    output_diff_path: Optional[str] = None,
+    threshold: float = 0.1,
+) -> Dict[str, Any]:
+    """Perform deterministic pixel-level comparison between two rendered slide images.
+
+    Generates a difference heat map overlay image, computes bounding boxes of change, and calculates similarity percentage.
+
+    Args:
+        before_image: Path to baseline / before PNG image.
+        after_image: Path to modified / after PNG image.
+        output_diff_path: Optional destination path for difference overlay image.
+        threshold: Pixel difference sensitivity threshold (0.0 to 1.0 or 0 to 255).
+
+    Returns:
+        Structured dictionary detailing similarity percentage, changed pixel count, and changed bounding boxes.
+    """
+    p_before = Path(before_image).resolve()
+    p_after = Path(after_image).resolve()
+
+    if not p_before.exists():
+        raise FileNotFoundError(f"Before image not found: {p_before}")
+    if not p_after.exists():
+        raise FileNotFoundError(f"After image not found: {p_after}")
+
+    thresh_int = int(round(threshold * 255.0)) if threshold <= 1.0 else int(threshold)
+
+    diff_result: VisualDiffResult = visual_diff(
+        str(p_before),
+        str(p_after),
+        diff_output_path=output_diff_path,
+        threshold=thresh_int,
+    )
+
+    return {
+        "success": True,
+        **diff_result.to_dict(),
+    }
