@@ -12,17 +12,29 @@ import anyio
 from mcp.server.mcpserver import MCPServer
 
 from powerpoint_mcp.tools.editing import (
+    ppt_align_shapes,
+    ppt_apply_style,
     ppt_batch_modify_shapes,
     ppt_batch_modify_text,
     ppt_copy_shape,
+    ppt_create_flow_diagram,
     ppt_delete_shape,
+    ppt_distribute_shapes,
+    ppt_equalize_sizes,
     ppt_modify_ooxml,
     ppt_modify_shape,
     ppt_modify_text,
+    ppt_move_container,
     ppt_move_shape,
+    ppt_reflow_container,
+    ppt_resize_container,
     ppt_resize_shape,
+    ppt_scale_slide_typography,
+    ppt_space_shapes,
 )
 from powerpoint_mcp.tools.inspection import (
+    ppt_analyze_containers,
+    ppt_analyze_slide_structure,
     ppt_compare_slides,
     ppt_inspect_presentation,
     ppt_inspect_shape,
@@ -406,6 +418,51 @@ def tool_validate_slide(
     )
 
 
+@app.tool(
+    name="ppt_analyze_slide_structure",
+    description=(
+        "Analyze the complete semantic layout hierarchy, shape roles (slide_title, subtitle, card, card_title, "
+        "metric, badge, body, bullet, footer, icon, image, connector), confidence scores, and logical container nesting."
+    ),
+)
+def tool_analyze_slide_structure(
+    slide_number: int,
+    presentation_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Analyze slide semantic roles, confidence, and container hierarchy.
+
+    Args:
+        slide_number: 1-indexed slide number.
+        presentation_path: Presentation path (defaults to active session).
+    """
+    return ppt_analyze_slide_structure(
+        slide_number=slide_number,
+        presentation_path=presentation_path,
+    )
+
+
+@app.tool(
+    name="ppt_analyze_containers",
+    description=(
+        "Identify logical containers (cards, group boxes) and their contained child elements on a slide "
+        "with bounding boxes, relative child positions, and container confidence scores."
+    ),
+)
+def tool_analyze_containers(
+    slide_number: int,
+    presentation_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Identify logical containers/cards and their child shapes on a slide.
+
+    Args:
+        slide_number: 1-indexed slide number.
+        presentation_path: Presentation path (defaults to active session).
+    """
+    return ppt_analyze_containers(
+        slide_number=slide_number,
+        presentation_path=presentation_path,
+    )
+
 
 # =============================================================================
 # 3. Editing & Mutation Tools
@@ -483,7 +540,8 @@ def tool_modify_shape(
     name="ppt_modify_text",
     description=(
         "Update text content and formatting in a text frame. Supports replacing full text or individual runs "
-        "while strictly preserving surrounding rich-text typography (font, size, colors, weights)."
+        "while strictly preserving surrounding rich-text typography (font, size, colors, weights). "
+        "Supports absolute font sizing, relative deltas (font_size_delta), scaling (font_size_scale), and bounds (min_font_size, max_font_size)."
     ),
 )
 def tool_modify_text(
@@ -494,6 +552,12 @@ def tool_modify_text(
     font_name: Optional[str] = None,
     font_size: Optional[float] = None,
     font_size_pt: Optional[float] = None,
+    font_size_delta: Optional[float] = None,
+    font_size_scale: Optional[float] = None,
+    min_font_size: Optional[float] = None,
+    max_font_size: Optional[float] = None,
+    min_pt: Optional[float] = None,
+    max_pt: Optional[float] = None,
     bold: Optional[bool] = None,
     italic: Optional[bool] = None,
     underline: Optional[bool] = None,
@@ -516,7 +580,11 @@ def tool_modify_text(
         shape_id: Target shape ID.
         text: New text string.
         font_family / font_name: Font name (e.g. 'Calibri', 'Arial', 'Aptos').
-        font_size / font_size_pt: Font point size.
+        font_size / font_size_pt: Absolute font point size.
+        font_size_delta: Relative point delta (+2, -2) to adjust current font size.
+        font_size_scale: Proportionally scale current font size by factor (e.g. 1.15).
+        min_font_size / min_pt: Lower bound font size clamp in points.
+        max_font_size / max_pt: Upper bound font size clamp in points.
         bold: Bold flag.
         italic: Italic flag.
         underline: Underline flag.
@@ -538,6 +606,12 @@ def tool_modify_text(
         font_name=font_name,
         font_size=font_size,
         font_size_pt=font_size_pt,
+        font_size_delta=font_size_delta,
+        font_size_scale=font_size_scale,
+        min_font_size=min_font_size,
+        max_font_size=max_font_size,
+        min_pt=min_pt,
+        max_pt=max_pt,
         bold=bold,
         italic=italic,
         underline=underline,
@@ -551,6 +625,51 @@ def tool_modify_text(
         margins=margins,
         paragraph_index=paragraph_index,
         run_index=run_index,
+        presentation_path=presentation_path,
+    )
+
+
+@app.tool(
+    name="ppt_scale_slide_typography",
+    description=(
+        "Proportionally scale or adjust font sizes across all text-bearing shapes on an entire slide "
+        "while strictly preserving typography hierarchy and paragraph/bullet formatting."
+    ),
+)
+def tool_scale_slide_typography(
+    slide_number: int,
+    scale_factor: float = 1.0,
+    font_size_delta: Optional[float] = None,
+    min_pt: Optional[float] = None,
+    max_pt: Optional[float] = None,
+    min_font_size: Optional[float] = None,
+    max_font_size: Optional[float] = None,
+    include_shape_ids: Optional[List[int]] = None,
+    exclude_shape_ids: Optional[List[int]] = None,
+    presentation_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Proportionally scale or shift typography across all text-bearing shapes on a slide.
+
+    Args:
+        slide_number: 1-indexed slide number.
+        scale_factor: Scale factor multiplier for font sizes (e.g. 1.15 for +15%, 0.85 for -15%).
+        font_size_delta: Point shift added to font sizes (e.g. +2.0, -1.0).
+        min_pt / min_font_size: Minimum resulting font size clamp in points.
+        max_pt / max_font_size: Maximum resulting font size clamp in points.
+        include_shape_ids: Optional list of shape IDs to exclusively scale.
+        exclude_shape_ids: Optional list of shape IDs to skip.
+        presentation_path: Presentation path (defaults to active session).
+    """
+    return ppt_scale_slide_typography(
+        slide_number=slide_number,
+        scale_factor=scale_factor,
+        font_size_delta=font_size_delta,
+        min_pt=min_pt,
+        max_pt=max_pt,
+        min_font_size=min_font_size,
+        max_font_size=max_font_size,
+        include_shape_ids=include_shape_ids,
+        exclude_shape_ids=exclude_shape_ids,
         presentation_path=presentation_path,
     )
 
@@ -742,6 +861,379 @@ def tool_batch_modify_shapes(
     return ppt_batch_modify_shapes(
         slide_number=slide_number,
         operations=operations,
+        presentation_path=presentation_path,
+    )
+
+
+@app.tool(
+    name="ppt_align_shapes",
+    description=(
+        "Align multiple shapes along a common edge or center line (left, center, right, top, middle, bottom) "
+        "without manual coordinate math."
+    ),
+)
+def tool_align_shapes(
+    slide_number: int,
+    shape_ids: List[int],
+    alignment: str,
+    reference_shape_id: Optional[int] = None,
+    presentation_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Align shapes along an axis or to a reference shape.
+
+    Args:
+        slide_number: 1-indexed slide number.
+        shape_ids: List of shape IDs to align (minimum 2).
+        alignment: Alignment mode ('left', 'center', 'right', 'top', 'middle', 'bottom').
+        reference_shape_id: Optional reference shape to align against.
+        presentation_path: Presentation path (defaults to active session).
+    """
+    return ppt_align_shapes(
+        slide_number=slide_number,
+        shape_ids=shape_ids,
+        alignment=alignment,
+        reference_shape_id=reference_shape_id,
+        presentation_path=presentation_path,
+    )
+
+
+@app.tool(
+    name="ppt_distribute_shapes",
+    description=(
+        "Distribute 3 or more shapes evenly across a horizontal or vertical axis using equal gaps or equal centers."
+    ),
+)
+def tool_distribute_shapes(
+    slide_number: int,
+    shape_ids: List[int],
+    direction: str = "horizontal",
+    spacing_mode: str = "equal_gaps",
+    presentation_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Distribute shapes evenly across a slide axis.
+
+    Args:
+        slide_number: 1-indexed slide number.
+        shape_ids: List of shape IDs to distribute (minimum 3).
+        direction: 'horizontal' or 'vertical'.
+        spacing_mode: 'equal_gaps' or 'equal_centers'.
+        presentation_path: Presentation path (defaults to active session).
+    """
+    return ppt_distribute_shapes(
+        slide_number=slide_number,
+        shape_ids=shape_ids,
+        direction=direction,
+        spacing_mode=spacing_mode,
+        presentation_path=presentation_path,
+    )
+
+
+@app.tool(
+    name="ppt_space_shapes",
+    description=(
+        "Set an exact fixed gap in inches between consecutive adjacent shapes horizontally or vertically."
+    ),
+)
+def tool_space_shapes(
+    slide_number: int,
+    shape_ids: List[int],
+    gap_inches: float,
+    direction: str = "horizontal",
+    presentation_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Set exact fixed spacing gap between shapes.
+
+    Args:
+        slide_number: 1-indexed slide number.
+        shape_ids: List of shape IDs to space (minimum 2).
+        gap_inches: Gap distance in inches between adjacent shape boundaries.
+        direction: 'horizontal' or 'vertical'.
+        presentation_path: Presentation path (defaults to active session).
+    """
+    return ppt_space_shapes(
+        slide_number=slide_number,
+        shape_ids=shape_ids,
+        gap_inches=gap_inches,
+        direction=direction,
+        presentation_path=presentation_path,
+    )
+
+
+@app.tool(
+    name="ppt_equalize_sizes",
+    description=(
+        "Equalize width, height, or both across multiple shapes deterministically using first, max, min, avg, or target dimensions."
+    ),
+)
+def tool_equalize_sizes(
+    slide_number: int,
+    shape_ids: List[int],
+    equalize_width: bool = True,
+    equalize_height: bool = True,
+    target_width: Optional[float] = None,
+    target_height: Optional[float] = None,
+    mode: str = "first",
+    presentation_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Equalize widths and heights across multiple shapes.
+
+    Args:
+        slide_number: 1-indexed slide number.
+        shape_ids: List of shape IDs to equalize.
+        equalize_width: Whether to equalize widths (default True).
+        equalize_height: Whether to equalize heights (default True).
+        target_width: Explicit target width in inches.
+        target_height: Explicit target height in inches.
+        mode: Sizing strategy ('first', 'max', 'min', 'avg').
+        presentation_path: Presentation path (defaults to active session).
+    """
+    return ppt_equalize_sizes(
+        slide_number=slide_number,
+        shape_ids=shape_ids,
+        equalize_width=equalize_width,
+        equalize_height=equalize_height,
+        target_width=target_width,
+        target_height=target_height,
+        mode=mode,
+        presentation_path=presentation_path,
+    )
+
+
+@app.tool(
+    name="ppt_move_container",
+    description=(
+        "Move a logical container (card) and all its nested child shapes atomically without breaking alignment or child offsets."
+    ),
+)
+def tool_move_container(
+    slide_number: int,
+    container_id: int,
+    x: Optional[float] = None,
+    y: Optional[float] = None,
+    dx: Optional[float] = None,
+    dy: Optional[float] = None,
+    presentation_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Move container and nested children atomically.
+
+    Args:
+        slide_number: 1-indexed slide number.
+        container_id: ID of container/card shape.
+        x: Absolute destination X coordinate in inches.
+        y: Absolute destination Y coordinate in inches.
+        dx: Relative delta shift X in inches.
+        dy: Relative delta shift Y in inches.
+        presentation_path: Presentation path (defaults to active session).
+    """
+    return ppt_move_container(
+        slide_number=slide_number,
+        container_id=container_id,
+        x=x,
+        y=y,
+        dx=dx,
+        dy=dy,
+        presentation_path=presentation_path,
+    )
+
+
+@app.tool(
+    name="ppt_resize_container",
+    description=(
+        "Resize a logical container (card) and proportionally adjust/reflow contained children to maintain padding and prevent overflow."
+    ),
+)
+def tool_resize_container(
+    slide_number: int,
+    container_id: int,
+    width: Optional[float] = None,
+    height: Optional[float] = None,
+    dwidth: Optional[float] = None,
+    dheight: Optional[float] = None,
+    scale_width: Optional[float] = None,
+    scale_height: Optional[float] = None,
+    reflow_children: bool = True,
+    presentation_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Resize container with proportional child scaling.
+
+    Args:
+        slide_number: 1-indexed slide number.
+        container_id: ID of container/card shape.
+        width: Absolute width in inches.
+        height: Absolute height in inches.
+        dwidth: Relative delta width in inches.
+        dheight: Relative delta height in inches.
+        scale_width: Width multiplier.
+        scale_height: Height multiplier.
+        reflow_children: Whether to proportionally adjust children (default True).
+        presentation_path: Presentation path (defaults to active session).
+    """
+    return ppt_resize_container(
+        slide_number=slide_number,
+        container_id=container_id,
+        width=width,
+        height=height,
+        dwidth=dwidth,
+        dheight=dheight,
+        scale_width=scale_width,
+        scale_height=scale_height,
+        reflow_children=reflow_children,
+        presentation_path=presentation_path,
+    )
+
+
+@app.tool(
+    name="ppt_reflow_container",
+    description=(
+        "Deterministically stack and organize all child elements vertically inside a container with clean padding and even vertical gaps."
+    ),
+)
+def tool_reflow_container(
+    slide_number: int,
+    container_id: int,
+    padding_inches: float = 0.2,
+    item_spacing_inches: float = 0.15,
+    presentation_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Stack and reflow elements inside a container.
+
+    Args:
+        slide_number: 1-indexed slide number.
+        container_id: ID of container/card shape.
+        padding_inches: Margin padding inside container edges in inches (default 0.2).
+        item_spacing_inches: Vertical spacing gap between items in inches (default 0.15).
+        presentation_path: Presentation path (defaults to active session).
+    """
+    return ppt_reflow_container(
+        slide_number=slide_number,
+        container_id=container_id,
+        padding_inches=padding_inches,
+        item_spacing_inches=item_spacing_inches,
+        presentation_path=presentation_path,
+    )
+
+
+@app.tool(
+    name="ppt_apply_style",
+    description=(
+        "Apply standard design style presets (card_default, card_accent, badge_neutral, badge_success, "
+        "badge_warning, badge_danger, title_hero, title_section, metric_kpi) or transfer fill/border/font "
+        "styles directly from a source shape without changing text content."
+    ),
+)
+def tool_apply_style(
+    slide_number: int,
+    shape_id: Optional[int] = None,
+    shape_ids: Optional[List[int]] = None,
+    source_shape_id: Optional[int] = None,
+    source_slide_number: Optional[int] = None,
+    preset: Optional[str] = None,
+    fill_color: Optional[str] = None,
+    line_color: Optional[str] = None,
+    line_width_pt: Optional[float] = None,
+    font_family: Optional[str] = None,
+    font_size_pt: Optional[float] = None,
+    font_color: Optional[str] = None,
+    bold: Optional[bool] = None,
+    italic: Optional[bool] = None,
+    presentation_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Apply style preset or transfer styling between shapes.
+
+    Args:
+        slide_number: 1-indexed slide number.
+        shape_id: Target shape ID (or pass list in shape_ids).
+        shape_ids: List of target shape IDs to style in batch.
+        source_shape_id: Shape ID to copy style from.
+        source_slide_number: Slide number of source shape (defaults to current slide).
+        preset: Standard preset name ('card_default', 'card_accent', 'badge_neutral', 'badge_success', 'badge_warning', 'badge_danger', 'title_hero', 'title_section', 'metric_kpi').
+        fill_color: Fill hex color (e.g. '#F8FAFC').
+        line_color: Border line hex color (e.g. '#E2E8F0').
+        line_width_pt: Border width in points.
+        font_family: Font family name.
+        font_size_pt: Font size in points.
+        font_color: Font text hex color.
+        bold: Bold flag.
+        italic: Italic flag.
+        presentation_path: Presentation path (defaults to active session).
+    """
+    return ppt_apply_style(
+        slide_number=slide_number,
+        shape_id=shape_id,
+        shape_ids=shape_ids,
+        source_shape_id=source_shape_id,
+        source_slide_number=source_slide_number,
+        preset=preset,
+        fill_color=fill_color,
+        line_color=line_color,
+        line_width_pt=line_width_pt,
+        font_family=font_family,
+        font_size_pt=font_size_pt,
+        font_color=font_color,
+        bold=bold,
+        italic=italic,
+        presentation_path=presentation_path,
+    )
+
+
+@app.tool(
+    name="ppt_create_flow_diagram",
+    description=(
+        "Create a clean multi-step flow or process diagram with aligned nodes, connecting arrows, "
+        "and typography presets without manual coordinate arithmetic."
+    ),
+)
+def tool_create_flow_diagram(
+    slide_number: int,
+    steps: List[Union[str, Dict[str, Any]]],
+    direction: str = "horizontal",
+    shape_type: str = "rounded_rectangle",
+    start_x: float = 1.0,
+    start_y: float = 2.2,
+    total_width: Optional[float] = None,
+    total_height: Optional[float] = None,
+    node_width: Optional[float] = None,
+    node_height: Optional[float] = None,
+    node_gap: Optional[float] = None,
+    style_preset: str = "card_default",
+    connector_style: str = "arrow",
+    connector_color: str = "#94A3B8",
+    presentation_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Create a structured flow diagram with nodes and arrows.
+
+    Args:
+        slide_number: 1-indexed slide number.
+        steps: List of step strings (e.g. ['Intake', 'Processing', 'Validation']) or dicts with title, description.
+        direction: 'horizontal' (default) or 'vertical'.
+        shape_type: 'rounded_rectangle', 'rectangle', 'chevron', 'oval'.
+        start_x: Origin X position in inches (default 1.0).
+        start_y: Origin Y position in inches (default 2.2).
+        total_width: Total span width in inches.
+        total_height: Total span height in inches.
+        node_width: Explicit node width in inches.
+        node_height: Explicit node height in inches.
+        node_gap: Gap distance between nodes in inches.
+        style_preset: Preset style name ('card_default', 'card_accent', 'badge_primary').
+        connector_style: 'arrow' (default), 'line', or 'none'.
+        connector_color: Hex color for connectors (default '#94A3B8').
+        presentation_path: Presentation path (defaults to active session).
+    """
+    return ppt_create_flow_diagram(
+        slide_number=slide_number,
+        steps=steps,
+        direction=direction,
+        shape_type=shape_type,
+        start_x=start_x,
+        start_y=start_y,
+        total_width=total_width,
+        total_height=total_height,
+        node_width=node_width,
+        node_height=node_height,
+        node_gap=node_gap,
+        style_preset=style_preset,
+        connector_style=connector_style,
+        connector_color=connector_color,
         presentation_path=presentation_path,
     )
 

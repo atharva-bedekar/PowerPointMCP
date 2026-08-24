@@ -343,3 +343,193 @@ def extract_shape_properties(shape: Any) -> Dict[str, Any]:
             pass
 
     return props
+
+
+STYLE_PRESETS: Dict[str, Dict[str, Any]] = {
+    "card_default": {
+        "fill_color": "#F8FAFC",
+        "line_color": "#E2E8F0",
+        "line_width_pt": 1.0,
+        "font_color": "#0F172A",
+    },
+    "card_accent": {
+        "fill_color": "#EFF6FF",
+        "line_color": "#3B82F6",
+        "line_width_pt": 1.5,
+        "font_color": "#1E3A8A",
+    },
+    "card_dark": {
+        "fill_color": "#0F172A",
+        "line_color": "#334155",
+        "line_width_pt": 1.0,
+        "font_color": "#F8FAFC",
+    },
+    "badge_neutral": {
+        "fill_color": "#F1F5F9",
+        "line_color": "#CBD5E1",
+        "line_width_pt": 0.75,
+        "font_color": "#475569",
+        "bold": True,
+        "font_size_pt": 8.0,
+    },
+    "badge_success": {
+        "fill_color": "#DEF7EC",
+        "line_color": "#31C48D",
+        "line_width_pt": 0.75,
+        "font_color": "#03543F",
+        "bold": True,
+        "font_size_pt": 8.0,
+    },
+    "badge_warning": {
+        "fill_color": "#FEF08A",
+        "line_color": "#FACC15",
+        "line_width_pt": 0.75,
+        "font_color": "#713F12",
+        "bold": True,
+        "font_size_pt": 8.0,
+    },
+    "badge_danger": {
+        "fill_color": "#FEE2E2",
+        "line_color": "#F87171",
+        "line_width_pt": 0.75,
+        "font_color": "#991B1B",
+        "bold": True,
+        "font_size_pt": 8.0,
+    },
+    "badge_primary": {
+        "fill_color": "#DBEAFE",
+        "line_color": "#60A5FA",
+        "line_width_pt": 0.75,
+        "font_color": "#1E40AF",
+        "bold": True,
+        "font_size_pt": 8.0,
+    },
+    "title_hero": {
+        "font_size_pt": 28.0,
+        "bold": True,
+        "font_color": "#0F172A",
+    },
+    "title_section": {
+        "font_size_pt": 18.0,
+        "bold": True,
+        "font_color": "#1E293B",
+    },
+    "metric_kpi": {
+        "font_size_pt": 26.0,
+        "bold": True,
+        "font_color": "#0F172A",
+    },
+    "divider_light": {
+        "line_color": "#E2E8F0",
+        "line_width_pt": 1.0,
+    },
+}
+
+
+def _hex_to_rgb(hex_str: str) -> RGBColor:
+    """Convert hex string (with or without #) to RGBColor."""
+    c = hex_str.strip().lstrip("#")
+    if len(c) == 3:
+        c = "".join(ch * 2 for ch in c)
+    if len(c) != 6:
+        raise ValueError(f"Invalid RGB hex color: '{hex_str}'")
+    return RGBColor(int(c[0:2], 16), int(c[2:4], 16), int(c[4:6], 16))
+
+
+def extract_complete_shape_style(shape: Any) -> Dict[str, Any]:
+    """Extract a complete snapshot of shape style properties for transfer."""
+    fill_info = extract_fill_style(shape)
+    line_info = extract_line_style(shape)
+
+    font_family = None
+    font_size_pt = None
+    font_color = None
+    bold = None
+    italic = None
+
+    if getattr(shape, "has_text_frame", False) and shape.text_frame.text:
+        tf = shape.text_frame
+        for p in tf.paragraphs:
+            if p.runs:
+                r = p.runs[0]
+                font_style = extract_font_style(getattr(r, "font", None))
+                font_family = font_style.font_name
+                font_size_pt = font_style.font_size_pt
+                font_color = font_style.color_rgb
+                bold = font_style.bold
+                italic = font_style.italic
+                break
+
+    return {
+        "fill_color": fill_info.get("color"),
+        "line_color": line_info.get("color"),
+        "line_width_pt": line_info.get("width_pt"),
+        "font_family": font_family,
+        "font_size_pt": font_size_pt,
+        "font_color": font_color,
+        "bold": bold,
+        "italic": italic,
+    }
+
+
+def apply_style_to_shape(
+    shape: Any,
+    fill_color: Optional[str] = None,
+    line_color: Optional[str] = None,
+    line_width_pt: Optional[float] = None,
+    font_family: Optional[str] = None,
+    font_size_pt: Optional[float] = None,
+    font_color: Optional[str] = None,
+    bold: Optional[bool] = None,
+    italic: Optional[bool] = None,
+) -> Dict[str, Any]:
+    """Apply styling attributes to a PowerPoint shape."""
+    # Apply fill
+    if fill_color is not None:
+        try:
+            shape.fill.solid()
+            shape.fill.fore_color.rgb = _hex_to_rgb(fill_color)
+        except Exception:
+            pass
+
+    # Apply line border
+    if line_color is not None or line_width_pt is not None:
+        try:
+            line = shape.line
+            if line_color is not None:
+                line.color.rgb = _hex_to_rgb(line_color)
+            if line_width_pt is not None:
+                from pptx.util import Pt
+                line.width = Pt(line_width_pt)
+        except Exception:
+            pass
+
+    # Apply text styling if shape has text frame
+    if getattr(shape, "has_text_frame", False):
+        tf = shape.text_frame
+        for p in tf.paragraphs:
+            for r in p.runs:
+                if font_family is not None:
+                    r.font.name = font_family
+                if font_size_pt is not None:
+                    from pptx.util import Pt
+                    r.font.size = Pt(font_size_pt)
+                if font_color is not None:
+                    r.font.color.rgb = _hex_to_rgb(font_color)
+                if bold is not None:
+                    r.font.bold = bold
+                if italic is not None:
+                    r.font.italic = italic
+
+    return {
+        "shape_id": shape.shape_id,
+        "name": shape.name,
+        "fill_color": fill_color,
+        "line_color": line_color,
+        "line_width_pt": line_width_pt,
+        "font_family": font_family,
+        "font_size_pt": font_size_pt,
+        "font_color": font_color,
+        "bold": bold,
+        "italic": italic,
+    }

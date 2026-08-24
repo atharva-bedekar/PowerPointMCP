@@ -168,8 +168,12 @@ def align_shapes(
 
     if isinstance(alignment, str):
         alignment_str = alignment.strip().lower()
+        if alignment_str.startswith("align_"):
+            alignment_str = alignment_str[6:]
     elif isinstance(alignment, AlignmentType):
         alignment_str = alignment.value.lower()
+        if alignment_str.startswith("align_"):
+            alignment_str = alignment_str[6:]
     else:
         raise ValueError(f"Invalid alignment: {alignment}")
 
@@ -304,6 +308,51 @@ def distribute_shapes(
 
     else:
         raise ValueError(f"Unknown distribution mode: '{mode_str}'. Supported: horizontal, vertical.")
+
+
+def space_shapes(
+    shapes: Sequence[Any],
+    gap_inches: float,
+    direction: Union[DistributionMode, str] = DistributionMode.HORIZONTAL,
+) -> List[Any]:
+    """Set exact fixed spacing gap between consecutive shapes.
+
+    Args:
+        shapes: Sequence of shapes to space.
+        gap_inches: Exact gap in inches between consecutive shape edges.
+        direction: 'horizontal' (left-to-right) or 'vertical' (top-to-bottom).
+
+    Returns:
+        Sorted and spaced list of shapes.
+    """
+    if len(shapes) < 2:
+        return list(shapes)
+
+    dir_str = direction.value.lower() if isinstance(direction, DistributionMode) else str(direction).strip().lower()
+    gap_emu = inches_to_emu(gap_inches)
+
+    if dir_str in ("horizontal", "h", "x"):
+        sorted_shapes = sorted(shapes, key=lambda s: _get_shape_bounds(s)[0])
+        first_l, _, first_w, _ = _get_shape_bounds(sorted_shapes[0])
+        curr_left = first_l + first_w + gap_emu
+        for i in range(1, len(sorted_shapes)):
+            _, _, w, _ = _get_shape_bounds(sorted_shapes[i])
+            _set_shape_bounds(sorted_shapes[i], left_emu=curr_left)
+            curr_left += w + gap_emu
+        return sorted_shapes
+
+    elif dir_str in ("vertical", "v", "y"):
+        sorted_shapes = sorted(shapes, key=lambda s: _get_shape_bounds(s)[1])
+        _, first_t, _, first_h = _get_shape_bounds(sorted_shapes[0])
+        curr_top = first_t + first_h + gap_emu
+        for i in range(1, len(sorted_shapes)):
+            _, _, _, h = _get_shape_bounds(sorted_shapes[i])
+            _set_shape_bounds(sorted_shapes[i], top_emu=curr_top)
+            curr_top += h + gap_emu
+        return sorted_shapes
+
+    else:
+        raise ValueError(f"Unknown spacing direction: '{dir_str}'. Supported: horizontal, vertical.")
 
 
 def equalize_dimensions(

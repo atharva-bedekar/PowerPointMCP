@@ -140,15 +140,15 @@ def _is_background_shape(shape: ShapeModel, slide_width_in: float, slide_height_
     return False
 
 
-def _is_valid_containment(container: ShapeModel, child: ShapeModel, tolerance_in: float = 0.08) -> bool:
-    """Check if child shape is legitimately nested inside a container/card shape (Priority 5)."""
+def _is_valid_containment(container: ShapeModel, child: ShapeModel, tolerance_in: float = 0.10) -> bool:
+    """Check if child shape is legitimately nested inside a container/card shape (Feature 11)."""
     cb = container.bbox
     kb = child.bbox
 
     c_area = cb.width_inches * cb.height_inches
     k_area = kb.width_inches * kb.height_inches
 
-    if c_area < k_area * 1.15:
+    if c_area < k_area * 1.05:
         return False
 
     # Check spatial containment: child bbox is within container bbox (with margin tolerance)
@@ -295,7 +295,11 @@ def _check_val_03_text_overflow(
     shapes: List[ShapeModel],
     overflow_threshold_ratio: float = 1.15,
 ) -> List[SlideIssue]:
-    """VAL-03: Text overflow heuristics (character count / estimated area vs text box area)."""
+    """VAL-03: Realistic text fit and overflow measurement using word-wrap simulation.
+
+    Distinguishes single-line wide banner text from true multi-line overflow,
+    and categorizes fit into FITS, LIKELY_OVERFLOW, and CONFIRMED_OVERFLOW.
+    """
     issues: List[SlideIssue] = []
 
     for s in shapes:
@@ -307,40 +311,65 @@ def _check_val_03_text_overflow(
 
         avail_w = max(0.1, b.width_inches - tf.margin_left_inches - tf.margin_right_inches)
         avail_h = max(0.1, b.height_inches - tf.margin_top_inches - tf.margin_bottom_inches)
-        avail_area = avail_w * avail_h
 
-        total_chars = len(tf.text)
+        total_chars = len(tf.text.strip())
         para_heights: List[float] = []
 
         for p in tf.paragraphs:
-            if not p.text:
+            p_text = (p.text or "").strip()
+            if not p_text:
                 continue
 
             # Determine dominant font size for paragraph
             font_size = 14.0
             for r in p.runs:
                 if r.style.font_size_pt is not None:
-                    font_size = r.style.font_size_pt
+                    font_size = float(r.style.font_size_pt)
                     break
 
-            # Approximate character width and line height
-            char_w_in = (font_size / 72.0) * 0.52
-            line_h_in = (font_size / 72.0) * 1.25
+            # Character width factor (conservative ~0.50 of font size in inches)
+            avg_char_w_in = (font_size / 72.0) * 0.50
+            line_h_in = (font_size / 72.0) * 1.22
+            space_w_in = avg_char_w_in * 0.8
 
-            chars_per_line = max(1, int(avail_w / max(0.01, char_w_in)))
-            p_lines = max(1, math.ceil(len(p.text) / chars_per_line))
-            p_height = p_lines * line_h_in + ((p.space_after_pt or 0.0) / 72.0)
+            words = p_text.split()
+            if not words:
+                continue
+
+            # Simulate word wrapping
+            lines_count = 1
+            cur_line_w = 0.0
+
+            for word in words:
+                word_w = len(word) * avg_char_w_in
+                if word_w > avail_w:
+                    # Single word exceeds line width, wrapping across multiple lines
+                    lines_for_word = max(1, math.ceil(word_w / avail_w))
+                    lines_count += (lines_for_word - 1)
+                    cur_line_w = word_w - ((lines_for_word - 1) * avail_w)
+                elif cur_line_w == 0.0:
+                    cur_line_w = word_w
+                elif cur_line_w + space_w_in + word_w <= avail_w:
+                    cur_line_w += space_w_in + word_w
+                else:
+                    lines_count += 1
+                    cur_line_w = word_w
+
+            p_height = (lines_count * line_h_in) + ((p.space_after_pt or 0.0) / 72.0)
             para_heights.append(p_height)
 
         total_text_height = sum(para_heights) if para_heights else 0.0
         overflow_ratio = total_text_height / avail_h if avail_h > 0 else 1.0
 
         if overflow_ratio > overflow_threshold_ratio:
+            is_confirmed = (overflow_ratio > 1.35)
+            classification = "CONFIRMED_OVERFLOW" if is_confirmed else "LIKELY_OVERFLOW"
             overflow_pct = int(round((overflow_ratio - 1.0) * 100))
+
             msg = (
-                f"WARNING: Text in Shape {s.shape_id} ('{s.name}') likely overflows "
-                f"text frame by estimated {overflow_pct}% (chars: {total_chars}, "
-                f"box: {b.width_inches:.2f}x{b.height_inches:.2f} in)."
+                f"WARNING: Text in Shape {s.shape_id} ('{s.name}') {classification.lower().replace('_', ' ')} "
+                f"by estimated {overflow_pct}% (box: {b.width_inches:.2f}x{b.height_inches:.2f} in, "
+                f"req height: {total_text_height:.2f} in)."
             )
             issues.append(
                 SlideIssue(
@@ -349,11 +378,12 @@ def _check_val_03_text_overflow(
                     shape_ids=[s.shape_id],
                     message=msg,
                     details={
+                        "classification": classification,
                         "shape_id": s.shape_id,
                         "shape_name": s.name,
                         "char_count": total_chars,
-                        "box_width_inches": b.width_inches,
-                        "box_height_inches": b.height_inches,
+                        "box_width_inches": round(b.width_inches, 2),
+                        "box_height_inches": round(b.height_inches, 2),
                         "estimated_text_height_inches": round(total_text_height, 2),
                         "available_height_inches": round(avail_h, 2),
                         "overflow_ratio": round(overflow_ratio, 2),
@@ -369,38 +399,89 @@ def _check_val_04_tiny_font(
     shapes: List[ShapeModel],
     min_font_pt: float = 8.0,
 ) -> List[SlideIssue]:
-    """VAL-04: Suspiciously tiny font (< 8.0 pt)."""
+    """VAL-04: Smart context-aware tiny font detection.
+
+    Distinguishes intentional compact UI text (badges, pills, footnotes, compact metadata)
+    from problematic tiny body/bullet text.
+    """
     issues: List[SlideIssue] = []
 
     for s in shapes:
         if not s.text_frame:
             continue
 
+        raw_text = (s.text_frame.text or "").strip()
+        if not raw_text:
+            continue
+
+        b = s.bbox
+        is_compact_shape = (b.height_inches <= 0.45 or b.width_inches <= 2.2 or len(raw_text) <= 20)
+        is_footer_or_meta = (
+            s.semantic_role in (SemanticRole.FOOTER, SemanticRole.UNKNOWN)
+            and (b.top_inches >= 6.5 or "footer" in s.name.lower() or "page" in s.name.lower() or "slide" in s.name.lower())
+        )
+        is_badge = (
+            is_compact_shape
+            or "badge" in s.name.lower()
+            or "pill" in s.name.lower()
+            or "tag" in s.name.lower()
+            or "chip" in s.name.lower()
+        )
+
         for p in s.text_frame.paragraphs:
             for r in p.runs:
                 f_size = r.style.font_size_pt
                 if f_size is not None and f_size < min_font_pt:
                     preview = (r.text[:40] + "...") if len(r.text) > 40 else r.text
-                    msg = (
-                        f"WARNING: Shape {s.shape_id} ('{s.name}') contains "
-                        f"suspiciously tiny text ({f_size:.1f} pt): '{preview}'"
-                    )
+
+                    # Classify based on context and role
+                    if is_badge or is_footer_or_meta:
+                        if f_size >= 6.0:
+                            classification = "INTENTIONAL_COMPACT_TEXT"
+                            severity = IssueSeverity.INFO
+                            msg = (
+                                f"INFO: Shape {s.shape_id} ('{s.name}') contains "
+                                f"intentional compact text ({f_size:.1f} pt) for badge/metadata: '{preview}'"
+                            )
+                        else:
+                            classification = "CRITICAL_TINY_TEXT"
+                            severity = IssueSeverity.WARNING
+                            msg = (
+                                f"WARNING: Shape {s.shape_id} ('{s.name}') contains "
+                                f"critically tiny text ({f_size:.1f} pt): '{preview}'"
+                            )
+                    elif f_size < 7.0:
+                        classification = "CRITICAL_TINY_TEXT"
+                        severity = IssueSeverity.WARNING
+                        msg = (
+                            f"WARNING: Shape {s.shape_id} ('{s.name}') contains "
+                            f"critically tiny text ({f_size:.1f} pt): '{preview}'"
+                        )
+                    else:
+                        classification = "SUSPICIOUS_TINY_TEXT"
+                        severity = IssueSeverity.WARNING
+                        msg = (
+                            f"WARNING: Shape {s.shape_id} ('{s.name}') contains "
+                            f"suspiciously tiny text ({f_size:.1f} pt): '{preview}'"
+                        )
+
                     issues.append(
                         SlideIssue(
                             rule_id="VAL-04",
-                            severity=IssueSeverity.WARNING,
+                            severity=severity,
                             shape_ids=[s.shape_id],
                             message=msg,
                             details={
+                                "classification": classification,
                                 "shape_id": s.shape_id,
                                 "shape_name": s.name,
                                 "font_size_pt": f_size,
                                 "min_threshold_pt": min_font_pt,
                                 "text_preview": preview,
+                                "semantic_role": s.semantic_role.value,
                             },
                         )
                     )
-                    # Report once per shape to avoid spamming
                     break
             else:
                 continue

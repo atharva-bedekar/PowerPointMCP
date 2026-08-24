@@ -17,6 +17,7 @@ from powerpoint_mcp.models.shape import (
     emu_to_inches,
     inches_to_emu,
 )
+from powerpoint_mcp.pptx.diagrams import create_flow_diagram
 from powerpoint_mcp.pptx.editor import (
     copy_shape,
     delete_shape,
@@ -24,8 +25,19 @@ from powerpoint_mcp.pptx.editor import (
     modify_text,
     move_shape,
     resize_shape,
+    scale_slide_typography,
 )
-from powerpoint_mcp.pptx.geometry import align_shapes, distribute_shapes
+from powerpoint_mcp.pptx.geometry import (
+    align_shapes,
+    distribute_shapes,
+    equalize_dimensions,
+    space_shapes,
+)
+from powerpoint_mcp.pptx.structure import (
+    move_container,
+    reflow_container,
+    resize_container,
+)
 from powerpoint_mcp.pptx.ooxml import (
     NAMESPACES,
     get_raw_shape_xml,
@@ -33,6 +45,11 @@ from powerpoint_mcp.pptx.ooxml import (
     set_drop_shadow,
     set_gradient_fill,
     set_shape_transparency,
+)
+from powerpoint_mcp.pptx.styles import (
+    STYLE_PRESETS,
+    apply_style_to_shape,
+    extract_complete_shape_style,
 )
 from powerpoint_mcp.tools.inspection import handle_tool_errors
 from powerpoint_mcp.tools.versioning import get_session_manager, resolve_active_target
@@ -193,6 +210,12 @@ def ppt_modify_text(
     font_name: Optional[str] = None,
     font_size: Optional[float] = None,
     font_size_pt: Optional[float] = None,
+    font_size_delta: Optional[float] = None,
+    font_size_scale: Optional[float] = None,
+    min_font_size: Optional[float] = None,
+    max_font_size: Optional[float] = None,
+    min_pt: Optional[float] = None,
+    max_pt: Optional[float] = None,
     bold: Optional[bool] = None,
     italic: Optional[bool] = None,
     underline: Optional[bool] = None,
@@ -210,12 +233,18 @@ def ppt_modify_text(
 ) -> Dict[str, Any]:
     """Modify text content, typography, colors, and margins while preserving surrounding styles.
 
+    Supports absolute font sizing, relative point deltas, and scale multipliers with min/max bounds.
+
     Args:
         slide_number: 1-indexed slide number.
         shape_id: Target shape ID.
         text: New text string.
         font_family / font_name: Font name (e.g. 'Calibri', 'Arial', 'Aptos').
-        font_size / font_size_pt: Font point size.
+        font_size / font_size_pt: Font point size (absolute).
+        font_size_delta: Relative point delta (+2, -2) to adjust current font size.
+        font_size_scale: Scale multiplier (e.g. 1.15) to proportionally scale font size.
+        min_font_size / min_pt: Lower bound clamp for font size in points.
+        max_font_size / max_pt: Upper bound clamp for font size in points.
         bold: Bold weight flag.
         italic: Italic flag.
         underline: Underline flag.
@@ -230,7 +259,7 @@ def ppt_modify_text(
         presentation_path: Presentation path.
 
     Returns:
-        Structured dictionary detailing updated text and paragraph counts.
+        Structured dictionary detailing updated text, font sizes, and paragraph counts.
     """
     target_path, prs, session = _get_target_presentation(presentation_path, operation=f"modify_text_{shape_id}")
 
@@ -245,6 +274,10 @@ def ppt_modify_text(
         text=text,
         font_family=font_family or font_name,
         font_size=font_size if font_size is not None else font_size_pt,
+        font_size_delta=font_size_delta,
+        font_size_scale=font_size_scale,
+        min_font_size=min_font_size if min_font_size is not None else min_pt,
+        max_font_size=max_font_size if max_font_size is not None else max_pt,
         bold=bold,
         italic=italic,
         underline=underline,
@@ -265,6 +298,10 @@ def ppt_modify_text(
         "shape_id": shape_id,
         "text_summary": (res.get("text") or "")[:100],
         "paragraph_count": res.get("paragraph_count", 1),
+        "font_size": res.get("font_size"),
+        "original_font_size": res.get("original_font_size"),
+        "resulting_font_size": res.get("resulting_font_size"),
+        "font_family": res.get("font_name"),
     }
 
 
@@ -607,7 +644,11 @@ def ppt_batch_modify_text(
             - shape_id: Target shape ID (int, required)
             - text: New text content (preserves paragraphs/bullets unless explicitly changed)
             - font_family / font_name: Font family name
-            - font_size / font_size_pt: Font size in points
+            - font_size / font_size_pt: Absolute font size in points
+            - font_size_delta: Relative point delta (+2, -2) to adjust font size
+            - font_size_scale: Scale multiplier (e.g. 1.15) to scale font size
+            - min_font_size / min_pt: Lower bound clamp for font size in points
+            - max_font_size / max_pt: Upper bound clamp for font size in points
             - bold, italic, underline: Typography flags
             - color / color_rgb: Hex RGB color string (e.g. '#1F497D')
             - alignment: Text alignment ('left', 'center', 'right', 'justify')
@@ -656,6 +697,10 @@ def ppt_batch_modify_text(
             text=op.get("text"),
             font_family=op.get("font_family") or op.get("font_name"),
             font_size=op.get("font_size") if op.get("font_size") is not None else op.get("font_size_pt"),
+            font_size_delta=op.get("font_size_delta"),
+            font_size_scale=op.get("font_size_scale"),
+            min_font_size=op.get("min_font_size") if op.get("min_font_size") is not None else op.get("min_pt"),
+            max_font_size=op.get("max_font_size") if op.get("max_font_size") is not None else op.get("max_pt"),
             bold=op.get("bold"),
             italic=op.get("italic"),
             underline=op.get("underline"),
@@ -669,8 +714,10 @@ def ppt_batch_modify_text(
         results.append({
             "shape_id": sid,
             "success": True,
-            "text_summary": res.get("text_summary"),
+            "text_summary": res.get("text_summary") or (res.get("text") or "")[:80],
             "font_size": res.get("font_size"),
+            "original_font_size": res.get("original_font_size"),
+            "resulting_font_size": res.get("resulting_font_size"),
             "font_family": res.get("font_name"),
         })
 
@@ -686,6 +733,69 @@ def ppt_batch_modify_text(
         "session_id": session.session_id if session else None,
         "target": "working" if session else "standalone",
         "results": results,
+    }
+
+
+@handle_tool_errors
+def ppt_scale_slide_typography(
+    slide_number: int,
+    scale_factor: float = 1.0,
+    font_size_delta: Optional[float] = None,
+    min_pt: Optional[float] = None,
+    max_pt: Optional[float] = None,
+    min_font_size: Optional[float] = None,
+    max_font_size: Optional[float] = None,
+    include_shape_ids: Optional[List[int]] = None,
+    exclude_shape_ids: Optional[List[int]] = None,
+    presentation_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Proportionally scale or shift typography across all text-bearing shapes on a slide while preserving hierarchy.
+
+    Args:
+        slide_number: 1-indexed slide number.
+        scale_factor: Scale factor multiplier for font sizes (e.g. 1.15 for +15%, 0.85 for -15%).
+        font_size_delta: Point shift added to font sizes (e.g. +2.0, -1.0).
+        min_pt / min_font_size: Minimum resulting font size clamp in points.
+        max_pt / max_font_size: Maximum resulting font size clamp in points.
+        include_shape_ids: Optional list of shape IDs to exclusively scale.
+        exclude_shape_ids: Optional list of shape IDs to skip.
+        presentation_path: Presentation path (defaults to active session).
+
+    Returns:
+        Structured summary detailing modified shapes with old/new sizes, skipped shapes, and reasons.
+    """
+    target_path, prs, session = _get_target_presentation(
+        presentation_path, operation=f"scale_typography_s{slide_number}"
+    )
+
+    if slide_number < 1 or slide_number > len(prs.slides):
+        raise IndexError(f"Slide number {slide_number} is out of range (1..{len(prs.slides)})")
+
+    slide = prs.slides[slide_number - 1]
+
+    eff_min = min_pt if min_pt is not None else min_font_size
+    eff_max = max_pt if max_pt is not None else max_font_size
+
+    res = scale_slide_typography(
+        slide,
+        scale_factor=scale_factor,
+        font_size_delta=font_size_delta,
+        min_pt=eff_min,
+        max_pt=eff_max,
+        include_shape_ids=include_shape_ids,
+        exclude_shape_ids=exclude_shape_ids,
+    )
+
+    prs.save(target_path)
+    if session:
+        session.save_metadata()
+
+    return {
+        "success": True,
+        "slide_number": slide_number,
+        "session_id": session.session_id if session else None,
+        "target": "working" if session else "standalone",
+        **res,
     }
 
 
@@ -782,5 +892,637 @@ def ppt_batch_modify_shapes(
         "session_id": session.session_id if session else None,
         "target": "working" if session else "standalone",
         "results": results,
+    }
+
+
+@handle_tool_errors
+def ppt_align_shapes(
+    slide_number: int,
+    shape_ids: List[int],
+    alignment: str,
+    reference_shape_id: Optional[int] = None,
+    presentation_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Align multiple shapes along a common edge or center line without manual arithmetic.
+
+    Args:
+        slide_number: 1-indexed slide number.
+        shape_ids: List of shape IDs to align (minimum 2).
+        alignment: 'left', 'center', 'right', 'top', 'middle', 'bottom' (or 'align_left', etc.).
+        reference_shape_id: Optional shape ID to align against (defaults to leftmost/topmost shape).
+        presentation_path: Presentation path (defaults to active session).
+
+    Returns:
+        Summary detailing aligned shape IDs and resulting coordinates.
+    """
+    if len(shape_ids) < 2:
+        raise ValueError("At least 2 shape IDs are required for alignment")
+
+    target_path, prs, session = _get_target_presentation(
+        presentation_path, operation=f"align_shapes_s{slide_number}_{alignment}"
+    )
+
+    if slide_number < 1 or slide_number > len(prs.slides):
+        raise IndexError(f"Slide number {slide_number} is out of range (1..{len(prs.slides)})")
+
+    slide = prs.slides[slide_number - 1]
+    shape_map = {s.shape_id: s for s in slide.shapes}
+
+    selected = []
+    for sid in shape_ids:
+        if sid not in shape_map:
+            raise ValueError(f"Shape with ID {sid} not found on slide {slide_number}")
+        selected.append(shape_map[sid])
+
+    ref_shape = shape_map.get(reference_shape_id) if reference_shape_id else None
+
+    align_shapes(selected, alignment=alignment, reference_shape=ref_shape)
+
+    prs.save(target_path)
+    if session:
+        session.save_metadata()
+
+    updated = [
+        {
+            "shape_id": s.shape_id,
+            "x": emu_to_inches(int(s.left)),
+            "y": emu_to_inches(int(s.top)),
+            "width": emu_to_inches(int(s.width)),
+            "height": emu_to_inches(int(s.height)),
+        }
+        for s in selected
+    ]
+
+    return {
+        "success": True,
+        "slide_number": slide_number,
+        "operation": f"align_{alignment.replace('align_', '')}",
+        "aligned_count": len(selected),
+        "shapes": updated,
+    }
+
+
+@handle_tool_errors
+def ppt_distribute_shapes(
+    slide_number: int,
+    shape_ids: List[int],
+    direction: str = "horizontal",
+    spacing_mode: str = "equal_gaps",
+    presentation_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Distribute shapes evenly across a horizontal or vertical axis.
+
+    Args:
+        slide_number: 1-indexed slide number.
+        shape_ids: List of shape IDs to distribute (minimum 3).
+        direction: 'horizontal' or 'vertical'.
+        spacing_mode: 'equal_gaps' (default) or 'equal_centers'.
+        presentation_path: Presentation path (defaults to active session).
+
+    Returns:
+        Summary detailing distributed shapes and updated coordinates.
+    """
+    if len(shape_ids) < 3:
+        raise ValueError("At least 3 shape IDs are required for distribution")
+
+    target_path, prs, session = _get_target_presentation(
+        presentation_path, operation=f"distribute_shapes_s{slide_number}_{direction}"
+    )
+
+    if slide_number < 1 or slide_number > len(prs.slides):
+        raise IndexError(f"Slide number {slide_number} is out of range (1..{len(prs.slides)})")
+
+    slide = prs.slides[slide_number - 1]
+    shape_map = {s.shape_id: s for s in slide.shapes}
+
+    selected = []
+    for sid in shape_ids:
+        if sid not in shape_map:
+            raise ValueError(f"Shape with ID {sid} not found on slide {slide_number}")
+        selected.append(shape_map[sid])
+
+    distributed = distribute_shapes(selected, mode=direction, spacing=spacing_mode)
+
+    prs.save(target_path)
+    if session:
+        session.save_metadata()
+
+    updated = [
+        {
+            "shape_id": s.shape_id,
+            "x": emu_to_inches(int(s.left)),
+            "y": emu_to_inches(int(s.top)),
+            "width": emu_to_inches(int(s.width)),
+            "height": emu_to_inches(int(s.height)),
+        }
+        for s in distributed
+    ]
+
+    return {
+        "success": True,
+        "slide_number": slide_number,
+        "direction": direction,
+        "spacing_mode": spacing_mode,
+        "distributed_count": len(distributed),
+        "shapes": updated,
+    }
+
+
+@handle_tool_errors
+def ppt_space_shapes(
+    slide_number: int,
+    shape_ids: List[int],
+    gap_inches: float,
+    direction: str = "horizontal",
+    presentation_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Set an exact fixed spacing gap between consecutive shapes.
+
+    Args:
+        slide_number: 1-indexed slide number.
+        shape_ids: List of shape IDs to space (minimum 2).
+        gap_inches: Fixed gap distance in inches between adjacent shape boundaries.
+        direction: 'horizontal' or 'vertical'.
+        presentation_path: Presentation path (defaults to active session).
+
+    Returns:
+        Summary detailing spaced shapes and updated positions.
+    """
+    if len(shape_ids) < 2:
+        raise ValueError("At least 2 shape IDs are required for spacing")
+
+    target_path, prs, session = _get_target_presentation(
+        presentation_path, operation=f"space_shapes_s{slide_number}_{direction}"
+    )
+
+    if slide_number < 1 or slide_number > len(prs.slides):
+        raise IndexError(f"Slide number {slide_number} is out of range (1..{len(prs.slides)})")
+
+    slide = prs.slides[slide_number - 1]
+    shape_map = {s.shape_id: s for s in slide.shapes}
+
+    selected = []
+    for sid in shape_ids:
+        if sid not in shape_map:
+            raise ValueError(f"Shape with ID {sid} not found on slide {slide_number}")
+        selected.append(shape_map[sid])
+
+    spaced = space_shapes(selected, gap_inches=gap_inches, direction=direction)
+
+    prs.save(target_path)
+    if session:
+        session.save_metadata()
+
+    updated = [
+        {
+            "shape_id": s.shape_id,
+            "x": emu_to_inches(int(s.left)),
+            "y": emu_to_inches(int(s.top)),
+            "width": emu_to_inches(int(s.width)),
+            "height": emu_to_inches(int(s.height)),
+        }
+        for s in spaced
+    ]
+
+    return {
+        "success": True,
+        "slide_number": slide_number,
+        "gap_inches": gap_inches,
+        "direction": direction,
+        "spaced_count": len(spaced),
+        "shapes": updated,
+    }
+
+
+@handle_tool_errors
+def ppt_equalize_sizes(
+    slide_number: int,
+    shape_ids: List[int],
+    equalize_width: bool = True,
+    equalize_height: bool = True,
+    target_width: Optional[float] = None,
+    target_height: Optional[float] = None,
+    mode: str = "first",
+    presentation_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Equalize widths and/or heights across multiple shapes deterministically.
+
+    Args:
+        slide_number: 1-indexed slide number.
+        shape_ids: List of shape IDs to equalize.
+        equalize_width: Whether to equalize widths (default True).
+        equalize_height: Whether to equalize heights (default True).
+        target_width: Explicit target width in inches (overrides mode).
+        target_height: Explicit target height in inches (overrides mode).
+        mode: Strategy for target dimension if not explicitly given ('first', 'max', 'min', 'avg').
+        presentation_path: Presentation path (defaults to active session).
+
+    Returns:
+        Summary detailing equalized dimensions and updated shape geometries.
+    """
+    if len(shape_ids) < 2:
+        raise ValueError("At least 2 shape IDs are required for equalization")
+
+    target_path, prs, session = _get_target_presentation(
+        presentation_path, operation=f"equalize_sizes_s{slide_number}"
+    )
+
+    if slide_number < 1 or slide_number > len(prs.slides):
+        raise IndexError(f"Slide number {slide_number} is out of range (1..{len(prs.slides)})")
+
+    slide = prs.slides[slide_number - 1]
+    shape_map = {s.shape_id: s for s in slide.shapes}
+
+    selected = []
+    for sid in shape_ids:
+        if sid not in shape_map:
+            raise ValueError(f"Shape with ID {sid} not found on slide {slide_number}")
+        selected.append(shape_map[sid])
+
+    equalized = equalize_dimensions(
+        selected,
+        equalize_width=equalize_width,
+        equalize_height=equalize_height,
+        target_width_inches=target_width,
+        target_height_inches=target_height,
+        mode=mode,
+    )
+
+    prs.save(target_path)
+    if session:
+        session.save_metadata()
+
+    updated = [
+        {
+            "shape_id": s.shape_id,
+            "x": emu_to_inches(int(s.left)),
+            "y": emu_to_inches(int(s.top)),
+            "width": emu_to_inches(int(s.width)),
+            "height": emu_to_inches(int(s.height)),
+        }
+        for s in equalized
+    ]
+
+    return {
+        "success": True,
+        "slide_number": slide_number,
+        "equalized_count": len(equalized),
+        "equalized_width": equalize_width,
+        "equalized_height": equalize_height,
+        "resulting_width": updated[0]["width"] if equalize_width else None,
+        "resulting_height": updated[0]["height"] if equalize_height else None,
+        "shapes": updated,
+    }
+
+
+@handle_tool_errors
+def ppt_move_container(
+    slide_number: int,
+    container_id: int,
+    x: Optional[float] = None,
+    y: Optional[float] = None,
+    dx: Optional[float] = None,
+    dy: Optional[float] = None,
+    presentation_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Move a logical container (card) and all its nested child shapes atomically.
+
+    Args:
+        slide_number: 1-indexed slide number.
+        container_id: ID of container shape.
+        x: Absolute destination X coordinate in inches.
+        y: Absolute destination Y coordinate in inches.
+        dx: Relative horizontal delta shift in inches.
+        dy: Relative vertical delta shift in inches.
+        presentation_path: Presentation path (defaults to active session).
+
+    Returns:
+        Summary detailing moved container position and all moved children.
+    """
+    target_path, prs, session = _get_target_presentation(
+        presentation_path, operation=f"move_container_c{container_id}"
+    )
+
+    if slide_number < 1 or slide_number > len(prs.slides):
+        raise IndexError(f"Slide number {slide_number} is out of range (1..{len(prs.slides)})")
+
+    slide = prs.slides[slide_number - 1]
+    res = move_container(slide, container_id=container_id, x=x, y=y, dx=dx, dy=dy)
+
+    prs.save(target_path)
+    if session:
+        session.save_metadata()
+
+    return {
+        "success": True,
+        "slide_number": slide_number,
+        "session_id": session.session_id if session else None,
+        "target": "working" if session else "standalone",
+        **res,
+    }
+
+
+@handle_tool_errors
+def ppt_resize_container(
+    slide_number: int,
+    container_id: int,
+    width: Optional[float] = None,
+    height: Optional[float] = None,
+    dwidth: Optional[float] = None,
+    dheight: Optional[float] = None,
+    scale_width: Optional[float] = None,
+    scale_height: Optional[float] = None,
+    reflow_children: bool = True,
+    presentation_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Resize a logical container/card and adjust child layout proportionally to prevent overflow.
+
+    Args:
+        slide_number: 1-indexed slide number.
+        container_id: ID of container shape.
+        width: Absolute width in inches.
+        height: Absolute height in inches.
+        dwidth: Relative delta width in inches.
+        dheight: Relative delta height in inches.
+        scale_width: Width scale multiplier (e.g. 1.2 for +20%).
+        scale_height: Height scale multiplier (e.g. 1.1 for +10%).
+        reflow_children: Proportionally adjust child bounds (default True).
+        presentation_path: Presentation path (defaults to active session).
+
+    Returns:
+        Summary detailing new container dimensions and updated child shapes.
+    """
+    target_path, prs, session = _get_target_presentation(
+        presentation_path, operation=f"resize_container_c{container_id}"
+    )
+
+    if slide_number < 1 or slide_number > len(prs.slides):
+        raise IndexError(f"Slide number {slide_number} is out of range (1..{len(prs.slides)})")
+
+    slide = prs.slides[slide_number - 1]
+    res = resize_container(
+        slide,
+        container_id=container_id,
+        width=width,
+        height=height,
+        dwidth=dwidth,
+        dheight=dheight,
+        scale_width=scale_width,
+        scale_height=scale_height,
+        reflow_children=reflow_children,
+    )
+
+    prs.save(target_path)
+    if session:
+        session.save_metadata()
+
+    return {
+        "success": True,
+        "slide_number": slide_number,
+        "session_id": session.session_id if session else None,
+        "target": "working" if session else "standalone",
+        **res,
+    }
+
+
+@handle_tool_errors
+def ppt_reflow_container(
+    slide_number: int,
+    container_id: int,
+    padding_inches: float = 0.2,
+    item_spacing_inches: float = 0.15,
+    presentation_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Deterministically stack and organize child elements vertically inside a container with clean padding.
+
+    Args:
+        slide_number: 1-indexed slide number.
+        container_id: ID of container shape.
+        padding_inches: Margin padding inside container edges in inches (default 0.2).
+        item_spacing_inches: Vertical spacing gap between items in inches (default 0.15).
+        presentation_path: Presentation path (defaults to active session).
+
+    Returns:
+        Summary detailing reflowed child elements and coordinates.
+    """
+    target_path, prs, session = _get_target_presentation(
+        presentation_path, operation=f"reflow_container_c{container_id}"
+    )
+
+    if slide_number < 1 or slide_number > len(prs.slides):
+        raise IndexError(f"Slide number {slide_number} is out of range (1..{len(prs.slides)})")
+
+    slide = prs.slides[slide_number - 1]
+    res = reflow_container(
+        slide,
+        container_id=container_id,
+        padding_inches=padding_inches,
+        item_spacing_inches=item_spacing_inches,
+    )
+
+    prs.save(target_path)
+    if session:
+        session.save_metadata()
+
+    return {
+        "success": True,
+        "slide_number": slide_number,
+        "session_id": session.session_id if session else None,
+        "target": "working" if session else "standalone",
+        **res,
+    }
+
+
+@handle_tool_errors
+def ppt_apply_style(
+    slide_number: int,
+    shape_id: Optional[int] = None,
+    shape_ids: Optional[List[int]] = None,
+    source_shape_id: Optional[int] = None,
+    source_slide_number: Optional[int] = None,
+    preset: Optional[str] = None,
+    fill_color: Optional[str] = None,
+    line_color: Optional[str] = None,
+    line_width_pt: Optional[float] = None,
+    font_family: Optional[str] = None,
+    font_size_pt: Optional[float] = None,
+    font_color: Optional[str] = None,
+    bold: Optional[bool] = None,
+    italic: Optional[bool] = None,
+    presentation_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Apply style presets or transfer styles from another shape without re-typing text.
+
+    Args:
+        slide_number: 1-indexed slide number.
+        shape_id: Target shape ID (or pass list in shape_ids).
+        shape_ids: List of target shape IDs to style in batch.
+        source_shape_id: Shape ID to copy style from (fill, line, typography).
+        source_slide_number: Slide number containing source shape (defaults to same slide).
+        preset: Standard design preset name ('card_default', 'card_accent', 'badge_neutral',
+                'badge_success', 'badge_warning', 'badge_danger', 'title_hero', 'title_section', 'metric_kpi').
+        fill_color: Override fill hex color (e.g. '#F8FAFC').
+        line_color: Override border line hex color.
+        line_width_pt: Override border line thickness in points.
+        font_family: Override font family name.
+        font_size_pt: Override font size in points.
+        font_color: Override font text hex color.
+        bold: Override bold flag.
+        italic: Override italic flag.
+        presentation_path: Presentation path (defaults to active session).
+
+    Returns:
+        Summary detailing styled shapes and applied attributes.
+    """
+    target_ids = list(shape_ids) if shape_ids else ([shape_id] if shape_id is not None else [])
+    if not target_ids:
+        raise ValueError("Either shape_id or shape_ids must be provided")
+
+    target_path, prs, session = _get_target_presentation(
+        presentation_path, operation=f"apply_style_s{slide_number}"
+    )
+
+    if slide_number < 1 or slide_number > len(prs.slides):
+        raise IndexError(f"Slide number {slide_number} is out of range (1..{len(prs.slides)})")
+
+    slide = prs.slides[slide_number - 1]
+    shape_map = {s.shape_id: s for s in slide.shapes}
+
+    # Extract base style from source shape or preset
+    style_props: Dict[str, Any] = {}
+
+    if source_shape_id is not None:
+        src_slide_num = source_slide_number or slide_number
+        if src_slide_num < 1 or src_slide_num > len(prs.slides):
+            raise IndexError(f"Source slide number {src_slide_num} is out of range")
+        src_slide = prs.slides[src_slide_num - 1]
+        src_shape = next((s for s in src_slide.shapes if s.shape_id == source_shape_id), None)
+        if not src_shape:
+            raise ValueError(f"Source shape ID {source_shape_id} not found on slide {src_slide_num}")
+        style_props = extract_complete_shape_style(src_shape)
+
+    elif preset:
+        preset_key = preset.strip().lower()
+        if preset_key not in STYLE_PRESETS:
+            raise ValueError(f"Unknown preset '{preset}'. Available: {list(STYLE_PRESETS.keys())}")
+        style_props = dict(STYLE_PRESETS[preset_key])
+
+    # Override with explicitly passed parameters
+    effective_fill = fill_color if fill_color is not None else style_props.get("fill_color")
+    effective_line = line_color if line_color is not None else style_props.get("line_color")
+    effective_line_w = line_width_pt if line_width_pt is not None else style_props.get("line_width_pt")
+    effective_font_fam = font_family if font_family is not None else style_props.get("font_family")
+    effective_font_sz = font_size_pt if font_size_pt is not None else style_props.get("font_size_pt")
+    effective_font_col = font_color if font_color is not None else style_props.get("font_color")
+    effective_bold = bold if bold is not None else style_props.get("bold")
+    effective_italic = italic if italic is not None else style_props.get("italic")
+
+    results = []
+    for sid in target_ids:
+        if sid not in shape_map:
+            raise ValueError(f"Target shape ID {sid} not found on slide {slide_number}")
+        shape = shape_map[sid]
+        res = apply_style_to_shape(
+            shape,
+            fill_color=effective_fill,
+            line_color=effective_line,
+            line_width_pt=effective_line_w,
+            font_family=effective_font_fam,
+            font_size_pt=effective_font_sz,
+            font_color=effective_font_col,
+            bold=effective_bold,
+            italic=effective_italic,
+        )
+        results.append(res)
+
+    prs.save(target_path)
+    if session:
+        session.save_metadata()
+
+    return {
+        "success": True,
+        "slide_number": slide_number,
+        "preset_applied": preset,
+        "source_shape_id": source_shape_id,
+        "shapes_styled_count": len(results),
+        "results": results,
+    }
+
+
+@handle_tool_errors
+def ppt_create_flow_diagram(
+    slide_number: int,
+    steps: List[Union[str, Dict[str, Any]]],
+    direction: str = "horizontal",
+    shape_type: str = "rounded_rectangle",
+    start_x: float = 1.0,
+    start_y: float = 2.2,
+    total_width: Optional[float] = None,
+    total_height: Optional[float] = None,
+    node_width: Optional[float] = None,
+    node_height: Optional[float] = None,
+    node_gap: Optional[float] = None,
+    style_preset: str = "card_default",
+    connector_style: str = "arrow",
+    connector_color: str = "#94A3B8",
+    presentation_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Create a structured multi-step flow diagram with connecting arrows and typography.
+
+    Args:
+        slide_number: 1-indexed slide number.
+        steps: List of step strings (e.g. ['Plan', 'Build', 'Test', 'Deploy']) or dicts with title, description, badge.
+        direction: 'horizontal' (default) or 'vertical'.
+        shape_type: 'rounded_rectangle', 'rectangle', 'chevron', 'oval'.
+        start_x: Diagram origin X position in inches (default 1.0).
+        start_y: Diagram origin Y position in inches (default 2.2).
+        total_width: Total span width in inches.
+        total_height: Total span height in inches.
+        node_width: Explicit node width in inches.
+        node_height: Explicit node height in inches.
+        node_gap: Gap distance between nodes in inches.
+        style_preset: Preset style ('card_default', 'card_accent', 'badge_primary').
+        connector_style: 'arrow' (default), 'line', or 'none'.
+        connector_color: Hex color for connectors (default '#94A3B8').
+        presentation_path: Presentation path (defaults to active session).
+
+    Returns:
+        Summary detailing created node shapes and connecting arrows.
+    """
+    target_path, prs, session = _get_target_presentation(
+        presentation_path, operation=f"create_flow_diagram_s{slide_number}"
+    )
+
+    if slide_number < 1 or slide_number > len(prs.slides):
+        raise IndexError(f"Slide number {slide_number} is out of range (1..{len(prs.slides)})")
+
+    slide = prs.slides[slide_number - 1]
+    res = create_flow_diagram(
+        slide,
+        steps=steps,
+        direction=direction,
+        shape_type=shape_type,
+        start_x=start_x,
+        start_y=start_y,
+        total_width=total_width,
+        total_height=total_height,
+        node_width=node_width,
+        node_height=node_height,
+        node_gap=node_gap,
+        style_preset=style_preset,
+        connector_style=connector_style,
+        connector_color=connector_color,
+    )
+
+    prs.save(target_path)
+    if session:
+        session.save_metadata()
+
+    return {
+        "success": True,
+        "slide_number": slide_number,
+        "session_id": session.session_id if session else None,
+        "target": "working" if session else "standalone",
+        **res,
     }
 

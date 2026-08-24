@@ -142,6 +142,29 @@ def ppt_render_slide(
     width_px = int(round(13.333 * dpi))
     height_px = int(round(7.5 * dpi))
 
+    import time
+    t0 = time.perf_counter()
+
+    # Cache check: if output file exists and is newer than target presentation
+    is_cached = False
+    if out_file.exists() and os.path.exists(target_path):
+        target_mtime = os.path.getmtime(target_path)
+        out_mtime = os.path.getmtime(str(out_file))
+        if out_mtime >= target_mtime and out_file.stat().st_size > 0:
+            is_cached = True
+            render_time_ms = round((time.perf_counter() - t0) * 1000, 2)
+            return {
+                "success": True,
+                "image_path": str(out_file),
+                "slide_number": slide_number,
+                "renderer": "cache",
+                "cached": True,
+                "render_time_ms": render_time_ms,
+                "width_px": width_px,
+                "height_px": height_px,
+                "dimensions": {"width_px": width_px, "height_px": height_px},
+            }
+
     renderer_used = "powerpoint_com"
     renderer_obj = get_available_renderer(preferred=renderer)
 
@@ -166,6 +189,8 @@ def ppt_render_slide(
         _render_pillow_fallback(target_path, slide_number, out_file, width_px, height_px)
         renderer_used = "pillow_fallback"
 
+    render_time_ms = round((time.perf_counter() - t0) * 1000, 2)
+
     # Update session renders record
     if session:
         session.renders.append({
@@ -181,8 +206,11 @@ def ppt_render_slide(
         "image_path": str(out_file),
         "slide_number": slide_number,
         "renderer": renderer_used,
+        "cached": False,
+        "render_time_ms": render_time_ms,
         "width_px": width_px,
         "height_px": height_px,
+        "dimensions": {"width_px": width_px, "height_px": height_px},
     }
 
 

@@ -346,13 +346,19 @@ def delete_shape(
 
 def modify_text(
     slide_or_prs: Any,
-    arg1: Any,
+    arg1: Optional[Any] = None,
     arg2: Optional[Any] = None,
     text: Optional[str] = None,
     font_family: Optional[str] = None,
     font_name: Optional[str] = None,
     font_size: Optional[float] = None,
     font_size_pt: Optional[float] = None,
+    font_size_delta: Optional[float] = None,
+    font_size_scale: Optional[float] = None,
+    min_font_size: Optional[float] = None,
+    max_font_size: Optional[float] = None,
+    min_pt: Optional[float] = None,
+    max_pt: Optional[float] = None,
     bold: Optional[bool] = None,
     italic: Optional[bool] = None,
     underline: Optional[bool] = None,
@@ -368,8 +374,7 @@ def modify_text(
 ) -> Dict[str, Any]:
     """Modify text content, typography, and paragraph styles with run-level style preservation.
 
-    When text is replaced, the primary run's typography (font, size, bold, italic, color)
-    is captured and preserved across the new text paragraphs/runs.
+    Supports absolute font sizing, relative deltas, and scaling with min/max bounds.
 
     Args:
         slide_or_prs: Slide, Presentation, or presentation path.
@@ -377,7 +382,11 @@ def modify_text(
         arg2: shape_id (if prs/path passed).
         text: New text content (preserves base typography or applies specified styles).
         font_family / font_name: Target font family name.
-        font_size / font_size_pt: Font size in points.
+        font_size / font_size_pt: Absolute font size in points.
+        font_size_delta: Relative point delta (+2, -2) to adjust current font size.
+        font_size_scale: Multiplier (e.g. 1.15) to scale current font size.
+        min_font_size / min_pt: Lower bound clamp for font size in points.
+        max_font_size / max_pt: Upper bound clamp for font size in points.
         bold: Bold weight flag.
         italic: Italic flag.
         underline: Underline flag.
@@ -389,10 +398,11 @@ def modify_text(
         margins: Margin dict in inches, e.g. {'left': 0.1, 'right': 0.1, 'top': 0.05, 'bottom': 0.05}.
 
     Returns:
-        Dictionary describing the updated text and typography.
+        Dictionary describing the updated text and typography with original/resulting sizes.
     """
     actual_shape_id = shape_id if shape_id is not None else (arg2 if arg2 is not None else arg1)
-    slide, shape = _resolve_target(slide_or_prs, arg1, actual_shape_id if arg2 is not None else None)
+    target_arg1 = arg1 if arg1 is not None else actual_shape_id
+    slide, shape = _resolve_target(slide_or_prs, target_arg1, actual_shape_id if arg2 is not None else None)
 
     if not getattr(shape, "has_text_frame", False):
         raise ValueError(f"Shape ID {shape.shape_id} does not have a text frame")
@@ -401,8 +411,30 @@ def modify_text(
 
     target_font_name = font_family or font_name
     target_font_size_pt = font_size if font_size is not None else font_size_pt
+    eff_min_pt = min_font_size if min_font_size is not None else min_pt
+    eff_max_pt = max_font_size if max_font_size is not None else max_pt
     target_color_hex = color or color_rgb
     target_space_before = space_before if space_before is not None else paragraph_spacing
+
+    def _calc_target_font_size(current_pt: Optional[float]) -> Optional[float]:
+        if target_font_size_pt is not None:
+            res = float(target_font_size_pt)
+        elif font_size_scale is not None or font_size_delta is not None:
+            base = float(current_pt) if current_pt is not None else 14.0
+            res = base
+            if font_size_scale is not None:
+                res = res * float(font_size_scale)
+            if font_size_delta is not None:
+                res = res + float(font_size_delta)
+        else:
+            return current_pt
+
+        if eff_min_pt is not None:
+            res = max(res, float(eff_min_pt))
+        if eff_max_pt is not None:
+            res = min(res, float(eff_max_pt))
+        res = max(1.0, round(res, 2))
+        return res
 
     # Resolve PP_ALIGN alignment enum if specified
     pp_align: Optional[PP_ALIGN] = None
@@ -414,11 +446,14 @@ def modify_text(
         elif isinstance(alignment, str):
             pp_align = ALIGNMENT_MAP.get(alignment.strip().lower())
 
+    original_font_sizes: List[float] = []
+    resulting_font_sizes: List[float] = []
+
     # If new text is provided: capture base style and recreate text
     if text is not None:
         # Step 1: Capture base formatting properties from the first populated run
         base_font_name: Optional[str] = None
-        base_font_size: Optional[Pt] = None
+        base_font_size_pt: Optional[float] = None
         base_bold: Optional[bool] = None
         base_italic: Optional[bool] = None
         base_underline: Optional[bool] = None
@@ -431,8 +466,11 @@ def modify_text(
             for r in p.runs:
                 if base_font_name is None and r.font.name:
                     base_font_name = r.font.name
-                if base_font_size is None and r.font.size is not None:
-                    base_font_size = r.font.size
+                if base_font_size_pt is None and r.font.size is not None:
+                    try:
+                        base_font_size_pt = float(r.font.size.pt)
+                    except Exception:
+                        base_font_size_pt = emu_to_pt(int(r.font.size))
                 if base_bold is None and r.font.bold is not None:
                     base_bold = r.font.bold
                 if base_italic is None and r.font.italic is not None:
@@ -446,8 +484,17 @@ def modify_text(
                     except Exception:
                         pass
 
+        if base_font_size_pt is not None:
+            original_font_sizes.append(base_font_size_pt)
+
+        computed_font_size_pt = _calc_target_font_size(base_font_size_pt)
+        if computed_font_size_pt is not None:
+            resulting_font_sizes.append(computed_font_size_pt)
+
         effective_font_name = target_font_name or base_font_name
-        effective_font_size = Pt(target_font_size_pt) if target_font_size_pt is not None else base_font_size
+        effective_font_size = Pt(computed_font_size_pt) if computed_font_size_pt is not None else (
+            Pt(base_font_size_pt) if base_font_size_pt is not None else None
+        )
         effective_bold = bold if bold is not None else base_bold
         effective_italic = italic if italic is not None else base_italic
         effective_underline = underline if underline is not None else base_underline
@@ -512,7 +559,6 @@ def modify_text(
                 if parent is not None:
                     parent.remove(p_elem)
 
-
     else:
         # Style-only updates across existing paragraphs and runs
         for p in tf.paragraphs:
@@ -526,10 +572,28 @@ def modify_text(
                 p.line_spacing = Pt(line_spacing)
 
             for r in p.runs:
+                cur_sz = None
+                if r.font.size is not None:
+                    try:
+                        cur_sz = float(r.font.size.pt)
+                    except Exception:
+                        cur_sz = emu_to_pt(int(r.font.size))
+                elif p.font and p.font.size is not None:
+                    try:
+                        cur_sz = float(p.font.size.pt)
+                    except Exception:
+                        cur_sz = emu_to_pt(int(p.font.size))
+
+                if cur_sz is not None:
+                    original_font_sizes.append(cur_sz)
+
+                new_sz = _calc_target_font_size(cur_sz)
+                if new_sz is not None:
+                    resulting_font_sizes.append(new_sz)
+                    r.font.size = Pt(new_sz)
+
                 if target_font_name:
                     r.font.name = target_font_name
-                if target_font_size_pt is not None:
-                    r.font.size = Pt(target_font_size_pt)
                 if bold is not None:
                     r.font.bold = bold
                 if italic is not None:
@@ -562,6 +626,136 @@ def modify_text(
         "name": shape.name,
         "text": tf.text,
         "paragraph_count": len(tf.paragraphs),
+        "font_size": resulting_font_sizes[0] if resulting_font_sizes else (original_font_sizes[0] if original_font_sizes else None),
+        "original_font_size": original_font_sizes[0] if original_font_sizes else None,
+        "resulting_font_size": resulting_font_sizes[0] if resulting_font_sizes else None,
+        "original_font_sizes": original_font_sizes,
+        "resulting_font_sizes": resulting_font_sizes,
+        "font_name": target_font_name or (tf.paragraphs[0].runs[0].font.name if tf.paragraphs and tf.paragraphs[0].runs else None),
+    }
+
+
+def scale_slide_typography(
+    slide_or_prs: Any,
+    slide_number: Optional[int] = None,
+    scale_factor: float = 1.0,
+    font_size_delta: Optional[float] = None,
+    min_pt: Optional[float] = None,
+    max_pt: Optional[float] = None,
+    include_shape_ids: Optional[List[int]] = None,
+    exclude_shape_ids: Optional[List[int]] = None,
+    preserve_hierarchy: bool = True,
+) -> Dict[str, Any]:
+    """Proportionally scale or shift typography across all text-bearing shapes on a slide while preserving hierarchy.
+
+    Args:
+        slide_or_prs: Slide or Presentation object or file path.
+        slide_number: 1-indexed slide number.
+        scale_factor: Multiplier for font sizes (e.g. 1.15 for +15%).
+        font_size_delta: Point shift added to font sizes (e.g. +2.0).
+        min_pt: Minimum resulting font size clamp in points.
+        max_pt: Maximum resulting font size clamp in points.
+        include_shape_ids: Optional list of shape IDs to exclusively scale.
+        exclude_shape_ids: Optional list of shape IDs to skip.
+        preserve_hierarchy: If True, preserves relative sizing differences between runs.
+
+    Returns:
+        Summary detailing modified shapes with old/new sizes, skipped shapes, and reasons.
+    """
+    slide = _resolve_slide(slide_or_prs, slide_number) if (not hasattr(slide_or_prs, "shapes") or hasattr(slide_or_prs, "slides")) else slide_or_prs
+
+    shapes_modified: List[Dict[str, Any]] = []
+    shapes_skipped: List[Dict[str, Any]] = []
+
+    inc_set = set(include_shape_ids) if include_shape_ids else None
+    exc_set = set(exclude_shape_ids) if exclude_shape_ids else set()
+
+    for shape in slide.shapes:
+        sid = shape.shape_id
+        if not getattr(shape, "has_text_frame", False):
+            continue
+
+        if inc_set is not None and sid not in inc_set:
+            shapes_skipped.append({
+                "shape_id": sid,
+                "name": shape.name,
+                "reason": "Not in include_shape_ids",
+            })
+            continue
+
+        if sid in exc_set:
+            shapes_skipped.append({
+                "shape_id": sid,
+                "name": shape.name,
+                "reason": "Explicitly excluded",
+            })
+            continue
+
+        tf = shape.text_frame
+        if not tf.text or not tf.text.strip():
+            shapes_skipped.append({
+                "shape_id": sid,
+                "name": shape.name,
+                "reason": "Empty text frame",
+            })
+            continue
+
+        old_sizes: List[float] = []
+        new_sizes: List[float] = []
+
+        for p in tf.paragraphs:
+            for r in p.runs:
+                cur_sz = None
+                if r.font.size is not None:
+                    try:
+                        cur_sz = float(r.font.size.pt)
+                    except Exception:
+                        cur_sz = emu_to_pt(int(r.font.size))
+                elif p.font and p.font.size is not None:
+                    try:
+                        cur_sz = float(p.font.size.pt)
+                    except Exception:
+                        cur_sz = emu_to_pt(int(p.font.size))
+                else:
+                    cur_sz = 14.0
+
+                old_sizes.append(round(cur_sz, 2))
+
+                # Compute new scaled size
+                new_sz = cur_sz * float(scale_factor)
+                if font_size_delta is not None:
+                    new_sz += float(font_size_delta)
+
+                if min_pt is not None:
+                    new_sz = max(new_sz, float(min_pt))
+                if max_pt is not None:
+                    new_sz = min(new_sz, float(max_pt))
+                new_sz = max(1.0, round(new_sz, 2))
+
+                new_sizes.append(new_sz)
+                r.font.size = Pt(new_sz)
+
+        shapes_modified.append({
+            "shape_id": sid,
+            "name": shape.name,
+            "text_summary": (tf.text or "").strip()[:80],
+            "old_font_sizes": old_sizes,
+            "new_font_sizes": new_sizes,
+            "old_primary_size": old_sizes[0] if old_sizes else None,
+            "new_primary_size": new_sizes[0] if new_sizes else None,
+        })
+
+    return {
+        "success": True,
+        "slide_number": getattr(slide, "slide_number", slide_number or 1),
+        "total_shapes_modified": len(shapes_modified),
+        "total_shapes_skipped": len(shapes_skipped),
+        "scale_factor": scale_factor,
+        "font_size_delta": font_size_delta,
+        "min_pt": min_pt,
+        "max_pt": max_pt,
+        "shapes_modified": shapes_modified,
+        "shapes_skipped": shapes_skipped,
     }
 
 

@@ -17,6 +17,10 @@ from powerpoint_mcp.pptx.inspector import (
     inspect_slide,
     match_shapes,
 )
+from powerpoint_mcp.pptx.structure import (
+    analyze_containers,
+    analyze_slide_structure,
+)
 from powerpoint_mcp.rendering.visual_compare import compare_slides
 from powerpoint_mcp.tools.versioning import get_session_manager, resolve_active_target
 from powerpoint_mcp.utils.validation import validate_slide
@@ -438,4 +442,46 @@ def ppt_validate_slide(
         "detail": detail,
         **val_result.to_dict(detail=detail),
     }
+
+
+@handle_tool_errors
+def ppt_analyze_slide_structure(
+    slide_number: int,
+    presentation_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Analyze the complete semantic layout hierarchy, roles, and card containers on a slide.
+
+    Args:
+        slide_number: 1-indexed slide number.
+        presentation_path: Path to presentation. If omitted, uses active session.
+
+    Returns:
+        Structured layout tree with roles (title, card, card_title, metric, badge, body), confidence, and containers.
+    """
+    if slide_number < 1:
+        raise IndexError(f"Slide number must be >= 1, got {slide_number}")
+
+    target_path = _resolve_presentation_path(presentation_path)
+    return analyze_slide_structure(target_path, slide_number)
+
+
+@handle_tool_errors
+def ppt_analyze_containers(
+    slide_number: int,
+    presentation_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Identify and return logical containers/cards and their nested children on a slide.
+
+    Args:
+        slide_number: 1-indexed slide number.
+        presentation_path: Path to presentation. If omitted, uses active session.
+
+    Returns:
+        Structured list of containers with bounding boxes and child shape IDs.
+    """
+    if slide_number < 1:
+        raise IndexError(f"Slide number must be >= 1, got {slide_number}")
+
+    target_path = _resolve_presentation_path(presentation_path)
+    return analyze_containers(target_path, slide_number)
 
