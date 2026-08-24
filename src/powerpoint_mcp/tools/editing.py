@@ -591,3 +591,196 @@ def ppt_modify_ooxml(
         "shape_id": shape_id,
         "xml_snippet": snippet[:500] if snippet else "<modified/>",
     }
+
+
+@handle_tool_errors
+def ppt_batch_modify_text(
+    slide_number: int,
+    operations: List[Dict[str, Any]],
+    presentation_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Modify multiple text shapes on a slide in a single transaction with pre-validation.
+
+    Args:
+        slide_number: 1-indexed slide number.
+        operations: List of shape edit dicts. Each dict supports:
+            - shape_id: Target shape ID (int, required)
+            - text: New text content (preserves paragraphs/bullets unless explicitly changed)
+            - font_family / font_name: Font family name
+            - font_size / font_size_pt: Font size in points
+            - bold, italic, underline: Typography flags
+            - color / color_rgb: Hex RGB color string (e.g. '#1F497D')
+            - alignment: Text alignment ('left', 'center', 'right', 'justify')
+            - paragraph_spacing / space_before: Points
+            - space_after: Points
+            - line_spacing: Points
+            - margins: Margin dict in inches
+        presentation_path: Presentation path (defaults to active session).
+
+    Returns:
+        Structured batch summary detailing applied changes per shape ID.
+    """
+    if not operations:
+        raise ValueError("Operations list cannot be empty")
+
+    target_path, prs, session = _get_target_presentation(
+        presentation_path, operation=f"batch_modify_text_s{slide_number}_n{len(operations)}"
+    )
+
+    if slide_number < 1 or slide_number > len(prs.slides):
+        raise IndexError(f"Slide number {slide_number} is out of range (1..{len(prs.slides)})")
+
+    slide = prs.slides[slide_number - 1]
+    shape_map = {s.shape_id: s for s in slide.shapes}
+
+    # Step 1: Pre-validation of all operations before mutating
+    for idx, op in enumerate(operations):
+        if not isinstance(op, dict):
+            raise ValueError(f"Operation at index {idx} must be a dictionary")
+        sid = op.get("shape_id")
+        if sid is None:
+            raise ValueError(f"Operation at index {idx} is missing required 'shape_id'")
+        if sid not in shape_map:
+            raise ValueError(f"Shape with ID {sid} not found on slide {slide_number}")
+        shape = shape_map[sid]
+        if not getattr(shape, "has_text_frame", False):
+            raise ValueError(f"Shape with ID {sid} does not support a text frame")
+
+    # Step 2: Apply mutations
+    results = []
+    for op in operations:
+        sid = op["shape_id"]
+        res = modify_text(
+            slide,
+            sid,
+            text=op.get("text"),
+            font_family=op.get("font_family") or op.get("font_name"),
+            font_size=op.get("font_size") if op.get("font_size") is not None else op.get("font_size_pt"),
+            bold=op.get("bold"),
+            italic=op.get("italic"),
+            underline=op.get("underline"),
+            color=op.get("color") or op.get("color_rgb"),
+            alignment=op.get("alignment"),
+            paragraph_spacing=op.get("paragraph_spacing") if op.get("paragraph_spacing") is not None else op.get("space_before"),
+            space_after=op.get("space_after"),
+            line_spacing=op.get("line_spacing"),
+            margins=op.get("margins"),
+        )
+        results.append({
+            "shape_id": sid,
+            "success": True,
+            "text_summary": res.get("text_summary"),
+            "font_size": res.get("font_size"),
+            "font_family": res.get("font_name"),
+        })
+
+    prs.save(target_path)
+    if session:
+        session.save_metadata()
+
+    return {
+        "success": True,
+        "slide_number": slide_number,
+        "operations_applied": len(results),
+        "total_operations": len(operations),
+        "session_id": session.session_id if session else None,
+        "target": "working" if session else "standalone",
+        "results": results,
+    }
+
+
+@handle_tool_errors
+def ppt_batch_modify_shapes(
+    slide_number: int,
+    operations: List[Dict[str, Any]],
+    presentation_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Modify multiple shape geometries (positions, sizes, rotations, z-orders) on a slide in a single transaction.
+
+    Args:
+        slide_number: 1-indexed slide number.
+        operations: List of shape modification dicts. Each dict supports:
+            - shape_id: Target shape ID (int, required)
+            - changes: Optional dict with geometry properties, OR geometry properties directly at top level:
+                - x, y, width, height: Absolute coordinates/dimensions in inches
+                - dx, dy, dwidth, dheight: Relative offsets in inches
+                - rotation, drotation: Absolute or relative rotation in degrees
+                - z_order: 'bring_to_front', 'send_to_back', 'bring_forward', 'send_backward', or int
+        presentation_path: Presentation path (defaults to active session).
+
+    Returns:
+        Structured batch summary with per-shape updated coordinates.
+    """
+    if not operations:
+        raise ValueError("Operations list cannot be empty")
+
+    target_path, prs, session = _get_target_presentation(
+        presentation_path, operation=f"batch_modify_shapes_s{slide_number}_n{len(operations)}"
+    )
+
+    if slide_number < 1 or slide_number > len(prs.slides):
+        raise IndexError(f"Slide number {slide_number} is out of range (1..{len(prs.slides)})")
+
+    slide = prs.slides[slide_number - 1]
+    shape_map = {s.shape_id: s for s in slide.shapes}
+
+    # Step 1: Pre-validation of all operations before mutating
+    for idx, op in enumerate(operations):
+        if not isinstance(op, dict):
+            raise ValueError(f"Operation at index {idx} must be a dictionary")
+        sid = op.get("shape_id")
+        if sid is None:
+            raise ValueError(f"Operation at index {idx} is missing required 'shape_id'")
+        if sid not in shape_map:
+            raise ValueError(f"Shape with ID {sid} not found on slide {slide_number}")
+
+    # Step 2: Apply geometry mutations
+    results = []
+    for op in operations:
+        sid = op["shape_id"]
+        changes = op.get("changes", {})
+        if not isinstance(changes, dict):
+            changes = {}
+
+        # Merge changes dict with top-level keys
+        merged = {**op, **changes}
+
+        res = modify_shape(
+            slide,
+            sid,
+            x=merged.get("x", merged.get("x_inches")),
+            y=merged.get("y", merged.get("y_inches")),
+            width=merged.get("width", merged.get("width_inches")),
+            height=merged.get("height", merged.get("height_inches")),
+            rotation=merged.get("rotation"),
+            z_order=merged.get("z_order"),
+            dx=merged.get("dx", merged.get("delta_x")),
+            dy=merged.get("dy", merged.get("delta_y")),
+            dwidth=merged.get("dwidth", merged.get("delta_width")),
+            dheight=merged.get("dheight", merged.get("delta_height")),
+            drotation=merged.get("drotation", merged.get("delta_rotation")),
+        )
+        results.append({
+            "shape_id": sid,
+            "success": True,
+            "x": res["x"],
+            "y": res["y"],
+            "width": res["width"],
+            "height": res["height"],
+            "rotation": res["rotation"],
+        })
+
+    prs.save(target_path)
+    if session:
+        session.save_metadata()
+
+    return {
+        "success": True,
+        "slide_number": slide_number,
+        "operations_applied": len(results),
+        "total_operations": len(operations),
+        "session_id": session.session_id if session else None,
+        "target": "working" if session else "standalone",
+        "results": results,
+    }
+

@@ -128,16 +128,30 @@ def ppt_inspect_slide(
     slide_number: int,
     presentation_path: Optional[str] = None,
     detail: str = "summary",
+    text_only: bool = False,
+    include_geometry: bool = True,
+    include_style: bool = True,
+    include_xml: bool = False,
+    include_images: bool = True,
+    shape_types: Optional[List[str]] = None,
+    semantic_roles: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
-    """Inspect all shapes on a specific slide with coordinates, semantic roles, typography, and styling.
+    """Inspect shapes on a specific slide with filtering and configurable detail levels.
 
     Args:
         slide_number: 1-indexed slide number.
         presentation_path: Path to presentation. If omitted, uses active session.
-        detail: 'summary' (default, agent-friendly concise output) or 'full' (deep shape data).
+        detail: 'summary' (default, agent-friendly concise output) or 'full' (exhaustive shape tree).
+        text_only: If True, return only shapes containing text.
+        include_geometry: Whether to include coordinates/dimensions.
+        include_style: Whether to include colors/font properties.
+        include_xml: Whether to include raw XML snippets (only in full mode).
+        include_images: Whether to include image/picture shapes.
+        shape_types: Optional list of shape types to filter (e.g. ['auto_shape', 'text_box']).
+        semantic_roles: Optional list of semantic roles to filter (e.g. ['title', 'body']).
 
     Returns:
-        Structured dictionary containing slide layout, title, dimensions, and shape collection.
+        Structured dictionary containing slide metadata and filtered shape collections.
     """
     if slide_number < 1:
         raise IndexError(f"Slide number must be >= 1, got {slide_number}")
@@ -145,10 +159,57 @@ def ppt_inspect_slide(
     target_path = _resolve_presentation_path(presentation_path)
     slide_model: SlideModel = inspect_slide(target_path, slide_number)
 
-    if str(detail).lower() == "full":
-        shapes_data = [s.to_dict() for s in slide_model.shapes]
-    else:
-        shapes_data = [s.to_summary_dict() for s in slide_model.shapes]
+    filtered_shapes = []
+    normalized_types = [t.strip().lower() for t in shape_types] if shape_types else None
+    normalized_roles = [r.strip().lower() for r in semantic_roles] if semantic_roles else None
+
+    for s in slide_model.shapes:
+        # Filter: text_only
+        has_text = bool(s.text_frame and s.text_frame.text and s.text_frame.text.strip())
+        if text_only and not has_text:
+            continue
+
+        # Filter: include_images
+        is_image = s.shape_type.value in ("picture", "image") or s.image_metadata is not None
+        if not include_images and is_image:
+            continue
+
+        # Filter: shape_types
+        if normalized_types and s.shape_type.value.lower() not in normalized_types:
+            continue
+
+        # Filter: semantic_roles
+        if normalized_roles and s.semantic_role.value.lower() not in normalized_roles:
+            continue
+
+        # Format shape according to detail level and inclusion flags
+        if str(detail).lower() == "full":
+            d = s.to_dict()
+            if not include_xml:
+                d.pop("raw_xml", None)
+            if not include_geometry:
+                for k in ("bbox", "x", "y", "width", "height", "right", "bottom", "rotation"):
+                    d.pop(k, None)
+            if not include_style:
+                for k in (
+                    "fill", "fill_color", "line", "line_color", "font_family", "font_name",
+                    "font_size", "font_size_pt", "bold", "italic", "underline", "color",
+                    "color_rgb", "alignment"
+                ):
+                    d.pop(k, None)
+        else:
+            d = s.to_summary_dict()
+            if not include_geometry:
+                for k in ("bbox", "x", "y", "width", "height", "right", "bottom", "rotation"):
+                    d.pop(k, None)
+            if not include_style:
+                for k in (
+                    "fill_color", "line_color", "line_width_pt", "font_family", "font_name",
+                    "font_size", "font_size_pt", "bold", "color", "color_rgb", "alignment"
+                ):
+                    d.pop(k, None)
+
+        filtered_shapes.append(d)
 
     return {
         "success": True,
@@ -156,7 +217,8 @@ def ppt_inspect_slide(
         "slide_id": slide_model.slide_id,
         "layout_name": slide_model.layout_name,
         "title": slide_model.title,
-        "shape_count": slide_model.shape_count,
+        "total_shape_count": slide_model.shape_count,
+        "shape_count": len(filtered_shapes),
         "width_inches": slide_model.width_inches,
         "height_inches": slide_model.height_inches,
         "width_emu": slide_model.width_emu,
@@ -164,8 +226,116 @@ def ppt_inspect_slide(
         "has_notes": slide_model.has_notes,
         "notes": slide_model.notes,
         "detail": detail,
-        "shapes": shapes_data,
+        "filters": {
+            "text_only": text_only,
+            "include_geometry": include_geometry,
+            "include_style": include_style,
+            "include_images": include_images,
+            "shape_types": shape_types,
+            "semantic_roles": semantic_roles,
+        },
+        "shapes": filtered_shapes,
     }
+
+
+@handle_tool_errors
+def ppt_inspect_text(
+    slide_number: int,
+    include_geometry: bool = True,
+    include_style: bool = True,
+    include_paragraph_metadata: bool = False,
+    presentation_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Efficiently inspect all text-bearing shapes on a slide without full shape-tree overhead.
+
+    Args:
+        slide_number: 1-indexed slide number.
+        include_geometry: Whether to include coordinates and bounding box dimensions.
+        include_style: Whether to include typography details (font, size, weight, color).
+        include_paragraph_metadata: Whether to include per-paragraph level and bullet metadata.
+        presentation_path: Path to presentation. If omitted, uses active session.
+
+    Returns:
+        Structured list of all text objects with IDs, semantic roles, text, and styles.
+    """
+    if slide_number < 1:
+        raise IndexError(f"Slide number must be >= 1, got {slide_number}")
+
+    target_path = _resolve_presentation_path(presentation_path)
+    slide_model: SlideModel = inspect_slide(target_path, slide_number)
+
+    text_shapes_out = []
+    for s in slide_model.shapes:
+        if not s.text_frame or not s.text_frame.text or not s.text_frame.text.strip():
+            continue
+
+        raw_text = s.text_frame.text.strip()
+        item: Dict[str, Any] = {
+            "shape_id": s.shape_id,
+            "name": s.name,
+            "semantic_role": s.semantic_role.value,
+            "text": raw_text,
+        }
+
+        if include_geometry:
+            item["bbox"] = {
+                "x": s.bbox.left_inches,
+                "y": s.bbox.top_inches,
+                "width": s.bbox.width_inches,
+                "height": s.bbox.height_inches,
+            }
+            item["x"] = s.bbox.left_inches
+            item["y"] = s.bbox.top_inches
+            item["width"] = s.bbox.width_inches
+            item["height"] = s.bbox.height_inches
+
+        if include_style:
+            first_style = None
+            alignment = None
+            for p in s.text_frame.paragraphs:
+                if p.runs:
+                    first_style = p.runs[0].style
+                    alignment = p.alignment
+                    break
+
+            item["font_family"] = first_style.font_name if (first_style and first_style.font_name) else "Default"
+            item["font_size"] = first_style.font_size_pt if (first_style and first_style.font_size_pt is not None) else None
+            item["bold"] = first_style.bold if first_style else False
+            item["italic"] = first_style.italic if first_style else False
+            item["color"] = first_style.color_rgb if (first_style and first_style.color_rgb) else None
+            item["alignment"] = alignment or "left"
+
+        if include_paragraph_metadata:
+            paras = []
+            for p in s.text_frame.paragraphs:
+                paras.append({
+                    "level": p.level,
+                    "alignment": p.alignment or "left",
+                    "text": p.text,
+                    "runs_count": len(p.runs),
+                })
+            item["paragraph_count"] = len(paras)
+            item["paragraphs"] = paras
+
+        # Rough overflow estimation: typical character area in pt^2 vs box area in sq pt
+        if include_geometry and include_style and item.get("font_size"):
+            f_size = item["font_size"]
+            box_area_sq_pt = (s.bbox.width_inches * 72) * (s.bbox.height_inches * 72)
+            est_text_area_sq_pt = len(raw_text) * (f_size * 0.6) * (f_size * 1.2)
+            if est_text_area_sq_pt > box_area_sq_pt * 1.25 and len(raw_text) > 30:
+                item["overflow_warning"] = True
+
+        text_shapes_out.append(item)
+
+    return {
+        "success": True,
+        "slide_number": slide_model.slide_number,
+        "slide_title": slide_model.title,
+        "total_slide_shapes": slide_model.shape_count,
+        "text_shape_count": len(text_shapes_out),
+        "shapes": text_shapes_out,
+    }
+
 
 
 

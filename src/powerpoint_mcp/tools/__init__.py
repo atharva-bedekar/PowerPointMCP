@@ -1,6 +1,8 @@
 """MCP tool modules, inspection, editing, rendering, and session versioning controllers."""
 
 from powerpoint_mcp.tools.editing import (
+    ppt_batch_modify_shapes,
+    ppt_batch_modify_text,
     ppt_copy_shape,
     ppt_delete_shape,
     ppt_modify_ooxml,
@@ -15,6 +17,7 @@ from powerpoint_mcp.tools.inspection import (
     ppt_inspect_presentation,
     ppt_inspect_shape,
     ppt_inspect_slide,
+    ppt_inspect_text,
     ppt_validate_slide,
 )
 from powerpoint_mcp.tools.rendering import (
@@ -53,8 +56,11 @@ __all__ = [
     "ppt_inspect_presentation",
     "ppt_inspect_shape",
     "ppt_inspect_slide",
+    "ppt_inspect_text",
     "ppt_validate_slide",
     # Editing
+    "ppt_batch_modify_shapes",
+    "ppt_batch_modify_text",
     "ppt_copy_shape",
     "ppt_delete_shape",
     "ppt_modify_ooxml",
@@ -67,3 +73,4 @@ __all__ = [
     "ppt_render_slide",
     "ppt_visual_diff",
 ]
+

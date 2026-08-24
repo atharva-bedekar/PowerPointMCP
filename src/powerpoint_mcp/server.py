@@ -12,6 +12,8 @@ import anyio
 from mcp.server.mcpserver import MCPServer
 
 from powerpoint_mcp.tools.editing import (
+    ppt_batch_modify_shapes,
+    ppt_batch_modify_text,
     ppt_copy_shape,
     ppt_delete_shape,
     ppt_modify_ooxml,
@@ -25,8 +27,10 @@ from powerpoint_mcp.tools.inspection import (
     ppt_inspect_presentation,
     ppt_inspect_shape,
     ppt_inspect_slide,
+    ppt_inspect_text,
     ppt_validate_slide,
 )
+
 from powerpoint_mcp.tools.rendering import (
     ppt_render_presentation,
     ppt_render_slide,
@@ -237,23 +241,81 @@ def tool_inspect_presentation(
 @app.tool(
     name="ppt_inspect_slide",
     description=(
-        "Inspect shapes on a specific slide. Defaults to concise agent-friendly summary (coordinates, "
-        "semantic roles, text summary, dominant typography, fills/lines). Pass detail='full' for exhaustive per-run metadata."
+        "Inspect shapes on a specific slide with filtering and detail control. Defaults to concise agent-friendly summary. "
+        "Supports text_only=True, include_geometry, include_style, include_images, shape_types, and semantic_roles filters."
     ),
 )
 def tool_inspect_slide(
     slide_number: int,
     presentation_path: Optional[str] = None,
     detail: str = "summary",
+    text_only: bool = False,
+    include_geometry: bool = True,
+    include_style: bool = True,
+    include_xml: bool = False,
+    include_images: bool = True,
+    shape_types: Optional[List[str]] = None,
+    semantic_roles: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
-    """Inspect 1-indexed slide shape tree, coordinates, semantic roles, and typography.
+    """Inspect slide shape tree with rich filtering and detail control.
 
     Args:
         slide_number: 1-indexed slide number.
         presentation_path: Presentation path (defaults to active session).
         detail: 'summary' (default, concise representation) or 'full' (exhaustive shape tree).
+        text_only: If True, returns only text-bearing shapes.
+        include_geometry: Whether to include coordinates/dimensions.
+        include_style: Whether to include font and color styling.
+        include_xml: Whether to include raw XML snippets (only in full mode).
+        include_images: Whether to include image/picture shapes.
+        shape_types: Optional shape types filter (e.g. ['auto_shape', 'text_box']).
+        semantic_roles: Optional semantic roles filter (e.g. ['title', 'body']).
     """
-    return ppt_inspect_slide(slide_number=slide_number, presentation_path=presentation_path, detail=detail)
+    return ppt_inspect_slide(
+        slide_number=slide_number,
+        presentation_path=presentation_path,
+        detail=detail,
+        text_only=text_only,
+        include_geometry=include_geometry,
+        include_style=include_style,
+        include_xml=include_xml,
+        include_images=include_images,
+        shape_types=shape_types,
+        semantic_roles=semantic_roles,
+    )
+
+
+@app.tool(
+    name="ppt_inspect_text",
+    description=(
+        "Efficiently inspect all text-bearing shapes on a slide without full shape-tree overhead. "
+        "Returns concise shape IDs, semantic roles, text content, font styling, and coordinates."
+    ),
+)
+def tool_inspect_text(
+    slide_number: int,
+    include_geometry: bool = True,
+    include_style: bool = True,
+    include_paragraph_metadata: bool = False,
+    presentation_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Inspect all text-bearing shapes on a slide.
+
+    Args:
+        slide_number: 1-indexed slide number.
+        include_geometry: Include bounding coordinates and dimensions (default True).
+        include_style: Include typography details (font, size, weight, color) (default True).
+        include_paragraph_metadata: Include per-paragraph level and bullet metadata (default False).
+        presentation_path: Presentation path (defaults to active session).
+    """
+    return ppt_inspect_text(
+        slide_number=slide_number,
+        include_geometry=include_geometry,
+        include_style=include_style,
+        include_paragraph_metadata=include_paragraph_metadata,
+        presentation_path=presentation_path,
+    )
+
 
 
 @app.tool(
@@ -630,6 +692,59 @@ def tool_delete_shape(
         shape_id=shape_id,
         presentation_path=presentation_path,
     )
+
+
+@app.tool(
+    name="ppt_batch_modify_text",
+    description=(
+        "Modify multiple text shapes on a slide in a single transaction with pre-validation. "
+        "Preserves existing paragraph bullets and indent structures by default."
+    ),
+)
+def tool_batch_modify_text(
+    slide_number: int,
+    operations: List[Dict[str, Any]],
+    presentation_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Batch modify text content and typography across multiple shapes on a slide.
+
+    Args:
+        slide_number: 1-indexed slide number.
+        operations: List of operation dicts containing shape_id, text, font_size, font_family, bold, italic, color, alignment, etc.
+        presentation_path: Presentation path (defaults to active session).
+    """
+    return ppt_batch_modify_text(
+        slide_number=slide_number,
+        operations=operations,
+        presentation_path=presentation_path,
+    )
+
+
+@app.tool(
+    name="ppt_batch_modify_shapes",
+    description=(
+        "Modify multiple shape geometries (positions, sizes, rotations, z-orders) on a slide in a single transaction. "
+        "Pre-validates all shape IDs and applies atomic geometry changes."
+    ),
+)
+def tool_batch_modify_shapes(
+    slide_number: int,
+    operations: List[Dict[str, Any]],
+    presentation_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Batch modify shape geometry coordinates and dimensions across multiple shapes on a slide.
+
+    Args:
+        slide_number: 1-indexed slide number.
+        operations: List of operation dicts containing shape_id and geometry changes (x, y, width, height, dx, dy, dwidth, dheight, rotation, z_order).
+        presentation_path: Presentation path (defaults to active session).
+    """
+    return ppt_batch_modify_shapes(
+        slide_number=slide_number,
+        operations=operations,
+        presentation_path=presentation_path,
+    )
+
 
 
 @app.tool(

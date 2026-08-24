@@ -1,0 +1,1 @@
+uv pip install -e .; uv run python scripts/sync_mcp.py; uv run pytest;

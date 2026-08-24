@@ -140,13 +140,46 @@ def _is_background_shape(shape: ShapeModel, slide_width_in: float, slide_height_
     return False
 
 
+def _is_valid_containment(container: ShapeModel, child: ShapeModel, tolerance_in: float = 0.08) -> bool:
+    """Check if child shape is legitimately nested inside a container/card shape (Priority 5)."""
+    cb = container.bbox
+    kb = child.bbox
+
+    c_area = cb.width_inches * cb.height_inches
+    k_area = kb.width_inches * kb.height_inches
+
+    if c_area < k_area * 1.15:
+        return False
+
+    # Check spatial containment: child bbox is within container bbox (with margin tolerance)
+    is_spatially_contained = (
+        kb.left_inches >= cb.left_inches - tolerance_in
+        and kb.top_inches >= cb.top_inches - tolerance_in
+        and kb.right_inches <= cb.right_inches + tolerance_in
+        and kb.bottom_inches <= cb.bottom_inches + tolerance_in
+    )
+
+    if not is_spatially_contained:
+        return False
+
+    # Z-order: content child must not be stacked underneath background container
+    if child.z_order < container.z_order:
+        return False
+
+    return True
+
+
 def _check_val_01_overlaps(
     shapes: List[ShapeModel],
     slide_width_in: float,
     slide_height_in: float,
     min_overlap_area_sq_in: float = 0.01,
 ) -> List[SlideIssue]:
-    """VAL-01: Overlap detection between shapes (AABB intersection area > threshold)."""
+    """VAL-01: Container-aware overlap detection between shapes.
+
+    Distinguishes legitimate card/container nesting (VALID_CONTAINMENT) from
+    actual layout collisions (ACTUAL_OVERLAP) or overflows (SUSPECT_OVERLAP).
+    """
     issues: List[SlideIssue] = []
     n = len(shapes)
 
@@ -159,6 +192,10 @@ def _check_val_01_overlaps(
         for j in range(i + 1, n):
             s2 = shapes[j]
             if _is_background_shape(s2, slide_width_in, slide_height_in):
+                continue
+
+            # Check if one shape is a container for the other (card + text/icon)
+            if _is_valid_containment(s1, s2) or _is_valid_containment(s2, s1):
                 continue
 
             b2 = s2.bbox
@@ -187,6 +224,7 @@ def _check_val_01_overlaps(
                             shape_ids=[s1.shape_id, s2.shape_id],
                             message=msg,
                             details={
+                                "classification": "ACTUAL_OVERLAP",
                                 "shape_1_id": s1.shape_id,
                                 "shape_1_name": s1.name,
                                 "shape_2_id": s2.shape_id,
@@ -200,6 +238,7 @@ def _check_val_01_overlaps(
                     )
 
     return issues
+
 
 
 def _check_val_02_clipping(

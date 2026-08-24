@@ -454,59 +454,64 @@ def modify_text(
         effective_color_rgb = _hex_to_rgb(target_color_hex) if target_color_hex is not None else base_color_rgb
         effective_alignment = pp_align if pp_align is not None else base_alignment
 
+        from copy import deepcopy
+
         lines = text.split("\n")
+        num_existing_paras = len(tf.paragraphs)
 
-        # Fast path: single line, single paragraph with 1 run
-        if len(lines) == 1 and len(tf.paragraphs) == 1 and len(tf.paragraphs[0].runs) == 1:
-            run = tf.paragraphs[0].runs[0]
-            run.text = lines[0]
-            if effective_font_name:
-                run.font.name = effective_font_name
-            if effective_font_size is not None:
-                run.font.size = effective_font_size
-            if effective_bold is not None:
-                run.font.bold = effective_bold
-            if effective_italic is not None:
-                run.font.italic = effective_italic
-            if effective_underline is not None:
-                run.font.underline = effective_underline
-            if effective_color_rgb is not None:
-                run.font.color.rgb = effective_color_rgb
-            if effective_alignment is not None:
-                tf.paragraphs[0].alignment = effective_alignment
-            if target_space_before is not None:
-                tf.paragraphs[0].space_before = Pt(target_space_before)
-            if space_after is not None:
-                tf.paragraphs[0].space_after = Pt(space_after)
-            if line_spacing is not None:
-                tf.paragraphs[0].line_spacing = Pt(line_spacing)
-        else:
-            tf.text = ""
-            for idx, line in enumerate(lines):
-                p = tf.paragraphs[0] if idx == 0 else tf.add_paragraph()
+        for idx, line in enumerate(lines):
+            if idx < num_existing_paras:
+                p = tf.paragraphs[idx]
+                if p.runs:
+                    p.runs[0].text = line
+                    for extra_r in p.runs[1:]:
+                        r_elem = extra_r._r
+                        r_parent = r_elem.getparent()
+                        if r_parent is not None:
+                            r_parent.remove(r_elem)
+                else:
+                    p.text = line
+            else:
+                p = tf.add_paragraph()
                 p.text = line
-                if effective_alignment is not None:
-                    p.alignment = effective_alignment
-                if target_space_before is not None:
-                    p.space_before = Pt(target_space_before)
-                if space_after is not None:
-                    p.space_after = Pt(space_after)
-                if line_spacing is not None:
-                    p.line_spacing = Pt(line_spacing)
+                if idx > 0 and len(tf.paragraphs) > 1:
+                    prev_p = tf.paragraphs[idx - 1]
+                    p.level = prev_p.level
+                    if prev_p._p.pPr is not None and p._p.pPr is None:
+                        p._p.insert(0, deepcopy(prev_p._p.pPr))
 
-                for r in p.runs:
-                    if effective_font_name:
-                        r.font.name = effective_font_name
-                    if effective_font_size is not None:
-                        r.font.size = effective_font_size
-                    if effective_bold is not None:
-                        r.font.bold = effective_bold
-                    if effective_italic is not None:
-                        r.font.italic = effective_italic
-                    if effective_underline is not None:
-                        r.font.underline = effective_underline
-                    if effective_color_rgb is not None:
-                        r.font.color.rgb = effective_color_rgb
+            # Apply explicit paragraph styles only if explicitly requested
+            if pp_align is not None:
+                p.alignment = pp_align
+            if target_space_before is not None:
+                p.space_before = Pt(target_space_before)
+            if space_after is not None:
+                p.space_after = Pt(space_after)
+            if line_spacing is not None:
+                p.line_spacing = Pt(line_spacing)
+
+            for r in p.runs:
+                if effective_font_name:
+                    r.font.name = effective_font_name
+                if effective_font_size is not None:
+                    r.font.size = effective_font_size
+                if effective_bold is not None:
+                    r.font.bold = effective_bold
+                if effective_italic is not None:
+                    r.font.italic = effective_italic
+                if effective_underline is not None:
+                    r.font.underline = effective_underline
+                if effective_color_rgb is not None:
+                    r.font.color.rgb = effective_color_rgb
+
+        # Remove any excess paragraphs if new text has fewer lines
+        if len(lines) < num_existing_paras:
+            for extra_p in list(tf.paragraphs)[len(lines):]:
+                p_elem = extra_p._p
+                parent = p_elem.getparent()
+                if parent is not None:
+                    parent.remove(p_elem)
+
 
     else:
         # Style-only updates across existing paragraphs and runs
