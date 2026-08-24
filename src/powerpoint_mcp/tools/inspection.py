@@ -18,7 +18,7 @@ from powerpoint_mcp.pptx.inspector import (
     match_shapes,
 )
 from powerpoint_mcp.rendering.visual_compare import compare_slides
-from powerpoint_mcp.tools.versioning import get_session_manager
+from powerpoint_mcp.tools.versioning import get_session_manager, resolve_active_target
 from powerpoint_mcp.utils.validation import validate_slide
 
 
@@ -74,19 +74,13 @@ def handle_tool_errors(func):
 
 
 def _resolve_presentation_path(presentation_path: Optional[str] = None) -> str:
-    """Resolve presentation path from argument or active session."""
-    if presentation_path:
-        p = Path(presentation_path).resolve()
-        if not p.exists():
-            raise FileNotFoundError(f"Presentation file not found: {p}")
-        return str(p)
-
-    mgr = get_session_manager()
-    session = mgr.get_current_session()
-    if session and session.working_path and Path(session.working_path).exists():
-        return str(Path(session.working_path).resolve())
-
-    raise ValueError("No presentation path provided and no active editing session found. Please call ppt_open first.")
+    """Resolve presentation path from argument or active session using resolve_active_target."""
+    target_path, _ = resolve_active_target(
+        presentation_path=presentation_path,
+        require_session=False,
+        mutation=False,
+    )
+    return target_path
 
 
 @handle_tool_errors
@@ -133,12 +127,14 @@ def ppt_inspect_presentation(
 def ppt_inspect_slide(
     slide_number: int,
     presentation_path: Optional[str] = None,
+    detail: str = "summary",
 ) -> Dict[str, Any]:
     """Inspect all shapes on a specific slide with coordinates, semantic roles, typography, and styling.
 
     Args:
         slide_number: 1-indexed slide number.
         presentation_path: Path to presentation. If omitted, uses active session.
+        detail: 'summary' (default, agent-friendly concise output) or 'full' (deep shape data).
 
     Returns:
         Structured dictionary containing slide layout, title, dimensions, and shape collection.
@@ -148,6 +144,11 @@ def ppt_inspect_slide(
 
     target_path = _resolve_presentation_path(presentation_path)
     slide_model: SlideModel = inspect_slide(target_path, slide_number)
+
+    if str(detail).lower() == "full":
+        shapes_data = [s.to_dict() for s in slide_model.shapes]
+    else:
+        shapes_data = [s.to_summary_dict() for s in slide_model.shapes]
 
     return {
         "success": True,
@@ -162,8 +163,10 @@ def ppt_inspect_slide(
         "height_emu": slide_model.height_emu,
         "has_notes": slide_model.has_notes,
         "notes": slide_model.notes,
-        "shapes": [s.to_dict() for s in slide_model.shapes],
+        "detail": detail,
+        "shapes": shapes_data,
     }
+
 
 
 @handle_tool_errors
@@ -237,6 +240,7 @@ def ppt_validate_slide(
     slide_number: int,
     rules: Optional[List[str]] = None,
     presentation_path: Optional[str] = None,
+    detail: str = "summary",
 ) -> Dict[str, Any]:
     """Run rule-based geometric and typographic validation on a slide.
 
@@ -247,9 +251,10 @@ def ppt_validate_slide(
         slide_number: 1-indexed slide number.
         rules: Optional list of specific rule IDs to check (e.g. ['VAL-01', 'VAL-02']).
         presentation_path: Path to presentation. If omitted, uses active session.
+        detail: 'summary' (default, concise report) or 'full' (deep issue detail dictionaries).
 
     Returns:
-        Slide validation report with is_valid, warning_count, warnings list, and slide metrics.
+        Slide validation report with is_valid, valid, summary counts, warning_count, warnings list, and slide metrics.
     """
     if slide_number < 1:
         raise IndexError(f"Slide number must be >= 1, got {slide_number}")
@@ -260,5 +265,7 @@ def ppt_validate_slide(
 
     return {
         "success": True,
-        **val_result.to_dict(),
+        "detail": detail,
+        **val_result.to_dict(detail=detail),
     }
+

@@ -1,4 +1,4 @@
-﻿"""Data models for shapes, bounding boxes, text styles, and text frames."""
+"""Data models for shapes, bounding boxes, text styles, and text frames."""
 
 from dataclasses import dataclass, field
 from enum import Enum
@@ -437,3 +437,74 @@ class ShapeModel:
             res["chart_metadata"] = self.chart_metadata
 
         return res
+
+    def to_summary_dict(self) -> Dict[str, Any]:
+        """Serialize shape to concise agent-friendly summary dictionary."""
+        res: Dict[str, Any] = {
+            "shape_id": self.shape_id,
+            "id": self.shape_id,
+            "name": self.name,
+            "shape_type": self.shape_type.value,
+            "type": self.shape_type.value,
+            "semantic_role": self.semantic_role.value,
+            "role": self.semantic_role.value,
+            "bbox": {
+                "left_inches": self.bbox.left_inches,
+                "top_inches": self.bbox.top_inches,
+                "width_inches": self.bbox.width_inches,
+                "height_inches": self.bbox.height_inches,
+            },
+            "x": self.bbox.left_inches,
+            "y": self.bbox.top_inches,
+            "width": self.bbox.width_inches,
+            "height": self.bbox.height_inches,
+            "right": self.bbox.right_inches,
+            "bottom": self.bbox.bottom_inches,
+            "rotation": round(self.rotation, 2),
+            "z_order": self.z_order,
+        }
+
+
+        if self.fill_color:
+            res["fill_color"] = self.fill_color
+        if self.line_color:
+            res["line_color"] = self.line_color
+        if self.line_width_pt is not None:
+            res["line_width_pt"] = self.line_width_pt
+
+        if self.text_frame and self.text_frame.text:
+            raw_text = self.text_frame.text.strip()
+            summary_text = (raw_text[:120] + "...") if len(raw_text) > 120 else raw_text
+            res["text"] = summary_text
+            res["text_summary"] = summary_text
+
+            for p in self.text_frame.paragraphs:
+                if p.runs:
+                    first_style = p.runs[0].style
+                    if first_style.font_name:
+                        res["font_family"] = first_style.font_name
+                        res["font_name"] = first_style.font_name
+                    if first_style.font_size_pt is not None:
+                        res["font_size"] = first_style.font_size_pt
+                        res["font_size_pt"] = first_style.font_size_pt
+                    if first_style.bold is not None:
+                        res["bold"] = first_style.bold
+                    if first_style.color_rgb:
+                        res["color"] = first_style.color_rgb
+                        res["color_rgb"] = first_style.color_rgb
+                    if p.alignment:
+                        res["alignment"] = p.alignment
+                    break
+
+        if self.table_metadata:
+            res["table"] = {
+                "rows": self.table_metadata.get("rows", 0),
+                "columns": self.table_metadata.get("columns", 0),
+            }
+        if self.chart_metadata:
+            res["chart"] = {
+                "chart_type": self.chart_metadata.get("chart_type", "unknown"),
+            }
+
+        return res
+

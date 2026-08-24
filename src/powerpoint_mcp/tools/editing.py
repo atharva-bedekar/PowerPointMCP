@@ -35,48 +35,26 @@ from powerpoint_mcp.pptx.ooxml import (
     set_shape_transparency,
 )
 from powerpoint_mcp.tools.inspection import handle_tool_errors
-from powerpoint_mcp.tools.versioning import get_session_manager
+from powerpoint_mcp.tools.versioning import get_session_manager, resolve_active_target
 
 
 def _get_target_presentation(
     presentation_path: Optional[str] = None, operation: str = "edit"
 ) -> Any:
-    """Resolve presentation file and ensure pre-mutation backup is made.
+    """Resolve presentation file using canonical resolve_active_target and ensure pre-mutation backup is made.
 
     Returns:
         tuple of (resolved_path_str, Presentation_instance, session_or_None)
     """
-    mgr = get_session_manager()
-    session = mgr.get_current_session()
-
-    if presentation_path:
-        target_p = Path(presentation_path).resolve()
-        if not target_p.exists():
-            raise FileNotFoundError(f"Presentation not found: {target_p}")
-        target_path_str = str(target_p)
-    elif session and session.working_path and Path(session.working_path).exists():
-        target_path_str = str(Path(session.working_path).resolve())
-    else:
-        raise ValueError("No presentation path provided and no active editing session found. Please call ppt_open first.")
-
-    # Create safety backup before mutation
-    try:
-        if session and (
-            Path(target_path_str) == Path(session.working_path).resolve()
-            or Path(target_path_str) == Path(session.source_path).resolve()
-        ):
-            mgr.create_backup(
-                session.session_id,
-                operation=operation,
-                label=f"Pre-mutation backup ({operation})",
-            )
-        else:
-            mgr.create_backup(target_path_str, operation=operation)
-    except Exception:
-        pass
-
+    target_path_str, session = resolve_active_target(
+        presentation_path=presentation_path,
+        require_session=False,
+        mutation=True,
+        operation=operation,
+    )
     prs = Presentation(target_path_str)
     return target_path_str, prs, session
+
 
 
 # Simple helper type for annotation

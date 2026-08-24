@@ -18,7 +18,7 @@ from powerpoint_mcp.rendering.renderer import (
     get_available_renderer,
 )
 from powerpoint_mcp.tools.inspection import handle_tool_errors
-from powerpoint_mcp.tools.versioning import get_session_manager
+from powerpoint_mcp.tools.versioning import get_session_manager, resolve_active_target
 from powerpoint_mcp.utils.paths import get_session_renders_dir
 
 
@@ -27,19 +27,14 @@ def _iso_now() -> str:
 
 
 def _resolve_presentation_path(presentation_path: Optional[str] = None) -> str:
-    """Resolve presentation path from argument or active session."""
-    if presentation_path:
-        p = Path(presentation_path).resolve()
-        if not p.exists():
-            raise FileNotFoundError(f"Presentation file not found: {p}")
-        return str(p)
+    """Resolve presentation path from argument or active session using resolve_active_target."""
+    target_path, _ = resolve_active_target(
+        presentation_path=presentation_path,
+        require_session=False,
+        mutation=False,
+    )
+    return target_path
 
-    mgr = get_session_manager()
-    session = mgr.get_current_session()
-    if session and session.working_path and Path(session.working_path).exists():
-        return str(Path(session.working_path).resolve())
-
-    raise ValueError("No presentation path provided and no active editing session found. Please call ppt_open first.")
 
 
 def _render_pillow_fallback(

@@ -6,7 +6,7 @@ import json
 import os
 from pathlib import Path
 import shutil
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 import uuid
 
 from pptx import Presentation
@@ -27,9 +27,23 @@ from powerpoint_mcp.utils.paths import (
 logger = get_logger("powerpoint_mcp.versioning")
 
 
+import hashlib
+
 def _iso_now() -> str:
     """Return current UTC time in ISO 8601 format."""
     return datetime.now(timezone.utc).isoformat()
+
+
+def compute_file_hash(path: Union[str, Path]) -> str:
+    """Compute SHA256 hex digest of a file."""
+    p = Path(path)
+    if not p.exists() or not p.is_file():
+        return ""
+    h = hashlib.sha256()
+    with open(p, "rb") as f:
+        while chunk := f.read(65536):
+            h.update(chunk)
+    return h.hexdigest()
 
 
 @dataclass
@@ -41,6 +55,10 @@ class Session:
     created_at: str
     last_modified_at: str
     slide_count: int = 0
+    mutation_count: int = 0
+    initial_working_hash: Optional[str] = None
+    initial_source_hash: Optional[str] = None
+    last_working_hash: Optional[str] = None
     backups: List[Dict[str, Any]] = field(default_factory=list)
     renders: List[Dict[str, Any]] = field(default_factory=list)
     metadata: Dict[str, Any] = field(default_factory=dict)
@@ -54,6 +72,10 @@ class Session:
             "created_at": self.created_at,
             "last_modified_at": self.last_modified_at,
             "slide_count": self.slide_count,
+            "mutation_count": self.mutation_count,
+            "initial_working_hash": self.initial_working_hash,
+            "initial_source_hash": self.initial_source_hash,
+            "last_working_hash": self.last_working_hash,
             "backups": self.backups,
             "renders": self.renders,
             "metadata": self.metadata,
@@ -65,6 +87,14 @@ class Session:
         meta_path.parent.mkdir(parents=True, exist_ok=True)
         with open(meta_path, "w", encoding="utf-8") as f:
             json.dump(self.to_dict(), f, indent=2)
+
+    def record_mutation(self) -> None:
+        """Record that a mutation was performed on the working copy."""
+        self.mutation_count += 1
+        now_str = _iso_now()
+        self.last_modified_at = now_str
+        self.last_working_hash = compute_file_hash(self.working_path)
+        self.save_metadata()
 
 
 class SessionManager:
@@ -114,6 +144,9 @@ class SessionManager:
         shutil.copy2(src_path, original_path)
         shutil.copy2(src_path, working_path)
 
+        src_hash = compute_file_hash(src_path)
+        working_hash = compute_file_hash(working_path)
+
         # Inspect slide count from working copy
         try:
             prs = Presentation(str(working_path))
@@ -130,6 +163,10 @@ class SessionManager:
             created_at=now_str,
             last_modified_at=now_str,
             slide_count=slide_count,
+            mutation_count=0,
+            initial_working_hash=working_hash,
+            initial_source_hash=src_hash,
+            last_working_hash=working_hash,
             backups=[],
             renders=[],
             metadata={
@@ -174,6 +211,10 @@ class SessionManager:
                     created_at=data["created_at"],
                     last_modified_at=data["last_modified_at"],
                     slide_count=data.get("slide_count", 0),
+                    mutation_count=data.get("mutation_count", 0),
+                    initial_working_hash=data.get("initial_working_hash"),
+                    initial_source_hash=data.get("initial_source_hash"),
+                    last_working_hash=data.get("last_working_hash"),
                     backups=data.get("backups", []),
                     renders=data.get("renders", []),
                     metadata=data.get("metadata", {}),
@@ -183,6 +224,8 @@ class SessionManager:
             except Exception as e:
                 logger.error(f"Error loading session metadata from {meta_path}: {e}")
                 return None
+
+        return None
 
         return None
 
@@ -368,8 +411,18 @@ class SessionManager:
             raise ValueError(f"Session not found: {session_id or self._active_session_id}")
 
         working_file = Path(session.working_path)
-        if not working_file.exists():
-            raise FileNotFoundError(f"Session working copy missing at {working_file}")
+        if not working_file.exists() or working_file.stat().st_size == 0:
+            raise FileNotFoundError(f"Session working copy missing or empty at {working_file}")
+
+        # Integrity Check 1: Verify working copy can be parsed as a valid Presentation
+        try:
+            test_prs = Presentation(str(working_file))
+            if len(test_prs.slides) == 0 and session.slide_count > 0:
+                raise ValueError("Working copy has 0 slides but original had slides.")
+        except Exception as exc:
+            raise ValueError(f"Session working copy is corrupted or invalid PPTX: {exc}")
+
+        current_working_hash = compute_file_hash(working_file)
 
         target_path = Path(destination_path).resolve() if destination_path else Path(session.source_path).resolve()
         target_path.parent.mkdir(parents=True, exist_ok=True)
@@ -386,12 +439,22 @@ class SessionManager:
 
         shutil.copy2(working_file, target_path)
 
+        # Integrity Check 2: Verify target file was successfully saved
+        try:
+            Presentation(str(target_path))
+        except Exception as exc:
+            raise ValueError(f"Saved presentation failed verification after save: {exc}")
+
+        saved_hash = compute_file_hash(target_path)
         now_str = _iso_now()
         session.last_modified_at = now_str
         session.metadata["last_save"] = {
             "timestamp": now_str,
             "saved_to": str(target_path),
             "backup_path": backup_path,
+            "working_hash": current_working_hash,
+            "saved_hash": saved_hash,
+            "mutation_count": session.mutation_count,
         }
         session.save_metadata()
 
@@ -401,6 +464,7 @@ class SessionManager:
             "session_id": session.session_id,
             "saved_path": str(target_path),
             "backup_path": backup_path,
+            "mutation_count": session.mutation_count,
             "timestamp": now_str,
         }
 
@@ -428,8 +492,14 @@ class SessionManager:
             raise ValueError(f"Session not found: {session_id or self._active_session_id}")
 
         working_file = Path(session.working_path)
-        if not working_file.exists():
-            raise FileNotFoundError(f"Session working copy missing at {working_file}")
+        if not working_file.exists() or working_file.stat().st_size == 0:
+            raise FileNotFoundError(f"Session working copy missing or empty at {working_file}")
+
+        # Integrity Check: verify working copy validity
+        try:
+            Presentation(str(working_file))
+        except Exception as exc:
+            raise ValueError(f"Session working copy is corrupted or invalid PPTX: {exc}")
 
         out_path = Path(output_path).resolve()
         if out_path.exists() and not overwrite:
@@ -448,12 +518,21 @@ class SessionManager:
 
         shutil.copy2(working_file, out_path)
 
+        # Integrity Check: verify written output file
+        try:
+            Presentation(str(out_path))
+        except Exception as exc:
+            raise ValueError(f"Saved-as presentation failed verification: {exc}")
+
+        saved_hash = compute_file_hash(out_path)
         now_str = _iso_now()
         session.last_modified_at = now_str
         session.metadata["last_save_as"] = {
             "timestamp": now_str,
             "saved_as": str(out_path),
             "backup_path": backup_path,
+            "saved_hash": saved_hash,
+            "mutation_count": session.mutation_count,
         }
         session.save_metadata()
 
@@ -463,6 +542,7 @@ class SessionManager:
             "session_id": session.session_id,
             "saved_path": str(out_path),
             "backup_path": backup_path,
+            "mutation_count": session.mutation_count,
             "timestamp": now_str,
         }
 
@@ -549,3 +629,93 @@ def get_session(session_id: Optional[str] = None) -> Optional[Session]:
 def get_current_session() -> Optional[Session]:
     """Get active session from the default SessionManager."""
     return get_session_manager().get_current_session()
+
+
+def resolve_active_target(
+    presentation_path: Optional[str] = None,
+    require_session: bool = False,
+    mutation: bool = False,
+    operation: Optional[str] = None,
+) -> Tuple[str, Optional[Session]]:
+    """Canonical presentation target resolution mechanism across all tools.
+
+    Rules:
+    1. If an active session exists:
+       - If mutation=True:
+         - All mutations MUST target session.working_path.
+         - If explicit presentation_path is provided:
+           - If it matches session.source_path or session.working_path (normalized), redirect seamlessly to working_path.
+           - If it points to a completely different presentation, raise ValueError (conflicting presentation_path).
+       - If mutation=False (read/inspect/render):
+         - If presentation_path is None or matches source/working copy, resolve to session.working_path.
+         - If explicit presentation_path points to another file, resolve to that other file.
+       - If mutation=True, create safety backup before mutation and increment session mutation tracking.
+       - Return (resolved_path_str, session).
+    2. If no active session exists:
+       - If require_session=True, raise ValueError.
+       - If presentation_path is provided:
+         - Verify file exists.
+         - If mutation=True, create standalone file backup.
+         - Return (resolved_path_str, None).
+       - Else:
+         - Raise ValueError.
+    """
+    mgr = get_session_manager()
+    session = mgr.get_current_session()
+
+    if session is not None and session.working_path and Path(session.working_path).exists():
+        working_p = Path(session.working_path).resolve()
+        source_p = Path(session.source_path).resolve()
+
+        if presentation_path:
+            req_p = Path(presentation_path).resolve()
+            # If presentation_path matches source or working copy, target working copy
+            if req_p == source_p or req_p == working_p:
+                target_p = working_p
+            else:
+                if mutation:
+                    raise ValueError(
+                        f"Active session '{session.session_id}' is targeting '{session.source_path}'. "
+                        f"Conflicting presentation_path '{presentation_path}' provided for mutation. "
+                        f"Cannot mutate another presentation while an active session exists. "
+                        f"Please close the session or omit presentation_path to edit the active session."
+                    )
+                else:
+                    if not req_p.exists():
+                        raise FileNotFoundError(f"Presentation not found: {req_p}")
+                    return str(req_p), session
+        else:
+            target_p = working_p
+
+        # Target is session working copy
+        target_path_str = str(target_p)
+        if mutation:
+            try:
+                mgr.create_backup(
+                    session.session_id,
+                    operation=operation or "mutation",
+                    label=f"Pre-mutation backup ({operation or 'edit'})",
+                )
+            except Exception:
+                pass
+            session.record_mutation()
+
+        return target_path_str, session
+
+    # No active session
+    if require_session:
+        raise ValueError("No active editing session found. Please call ppt_open first.")
+
+    if presentation_path:
+        p = Path(presentation_path).resolve()
+        if not p.exists():
+            raise FileNotFoundError(f"Presentation not found: {p}")
+        target_path_str = str(p)
+        if mutation:
+            try:
+                mgr.create_backup(target_path_str, operation=operation or "standalone_mutation")
+            except Exception:
+                pass
+        return target_path_str, None
+
+    raise ValueError("No presentation path provided and no active editing session found. Please call ppt_open first.")

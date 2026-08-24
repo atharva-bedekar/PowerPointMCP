@@ -237,21 +237,23 @@ def tool_inspect_presentation(
 @app.tool(
     name="ppt_inspect_slide",
     description=(
-        "Inspect all shapes on a specific slide, returning geometry (in inches), semantic roles "
-        "(title, subtitle, body, diagram, image, footer), text content, font styling, colors, and layout structure."
+        "Inspect shapes on a specific slide. Defaults to concise agent-friendly summary (coordinates, "
+        "semantic roles, text summary, dominant typography, fills/lines). Pass detail='full' for exhaustive per-run metadata."
     ),
 )
 def tool_inspect_slide(
     slide_number: int,
     presentation_path: Optional[str] = None,
+    detail: str = "summary",
 ) -> Dict[str, Any]:
     """Inspect 1-indexed slide shape tree, coordinates, semantic roles, and typography.
 
     Args:
         slide_number: 1-indexed slide number.
         presentation_path: Presentation path (defaults to active session).
+        detail: 'summary' (default, concise representation) or 'full' (exhaustive shape tree).
     """
-    return ppt_inspect_slide(slide_number=slide_number, presentation_path=presentation_path)
+    return ppt_inspect_slide(slide_number=slide_number, presentation_path=presentation_path, detail=detail)
 
 
 @app.tool(
@@ -317,26 +319,30 @@ def tool_compare_slides(
     description=(
         "Run rule-based geometric and typographic validation on a slide, detecting overlaps (VAL-01), "
         "boundary clipping (VAL-02), off-slide elements (VAL-03), text overflow (VAL-04), tiny fonts (VAL-05), "
-        "and duplicate objects (VAL-07)."
+        "and duplicate objects (VAL-07). Returns structured summary counts and issue descriptions."
     ),
 )
 def tool_validate_slide(
     slide_number: int,
     rules: Optional[List[str]] = None,
     presentation_path: Optional[str] = None,
+    detail: str = "summary",
 ) -> Dict[str, Any]:
     """Validate slide geometry and text for layout defects.
 
     Args:
         slide_number: 1-indexed slide number.
         rules: Optional list of rule IDs to check (e.g. ['VAL-01', 'VAL-02']). Defaults to all rules.
-        presentation_path: Presentation path.
+        presentation_path: Presentation path (defaults to active session).
+        detail: 'summary' (default, concise report) or 'full' (deep details dictionary).
     """
     return ppt_validate_slide(
         slide_number=slide_number,
         rules=rules,
         presentation_path=presentation_path,
+        detail=detail,
     )
+
 
 
 # =============================================================================

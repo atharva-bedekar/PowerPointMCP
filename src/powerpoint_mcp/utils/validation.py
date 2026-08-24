@@ -42,15 +42,17 @@ class SlideIssue:
         """Return severity as standard lowercase string."""
         return self.severity.value if isinstance(self.severity, IssueSeverity) else str(self.severity).lower()
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self, detail: str = "full") -> Dict[str, Any]:
         """Serialize issue to dictionary matching spec schema."""
-        return {
+        res = {
             "rule_id": self.rule_id,
             "severity": self.severity_str,
             "shape_ids": self.shape_ids,
             "message": self.message,
-            "details": self.details,
         }
+        if detail == "full" or self.details:
+            res["details"] = self.details
+        return res
 
 
 @dataclass
@@ -78,17 +80,32 @@ class SlideValidationResult:
         """Filter only warning severity issues."""
         return [i for i in self.issues if i.severity_str == "warning"]
 
-    def to_dict(self) -> Dict[str, Any]:
+    def get_summary_counts(self) -> Dict[str, int]:
+        """Return issue counts broken down by category."""
+        return {
+            "overlaps": sum(1 for i in self.issues if i.rule_id == "VAL-01"),
+            "boundary_violations": sum(1 for i in self.issues if i.rule_id == "VAL-02"),
+            "text_overflow": sum(1 for i in self.issues if i.rule_id == "VAL-03"),
+            "tiny_fonts": sum(1 for i in self.issues if i.rule_id == "VAL-04"),
+            "title_inconsistencies": sum(1 for i in self.issues if i.rule_id == "VAL-05"),
+            "duplicate_objects": sum(1 for i in self.issues if i.rule_id == "VAL-06"),
+            "extreme_rotations": sum(1 for i in self.issues if i.rule_id == "VAL-07"),
+        }
+
+    def to_dict(self, detail: str = "summary") -> Dict[str, Any]:
         """Serialize slide validation report to dictionary matching MCP and JSON schemas."""
         return {
             "slide_number": self.slide_number,
             "is_valid": self.is_valid,
+            "valid": self.is_valid,
             "warning_count": self.warning_count,
             "error_count": self.error_count,
-            "warnings": [i.to_dict() for i in self.issues],
-            "issues": [i.to_dict() for i in self.issues],
+            "summary": self.get_summary_counts(),
+            "warnings": [i.to_dict(detail=detail) for i in self.issues],
+            "issues": [i.to_dict(detail=detail) for i in self.issues],
             "metrics": self.metrics,
         }
+
 
 
 @dataclass
