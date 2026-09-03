@@ -50,6 +50,16 @@ Always follow the 4-tier execution hierarchy:
 16. **Save only after verification**: Call `ppt_save` or `ppt_save_as` only after verifying visual and geometric integrity.
 17. **Inspect reference slides first**: When asked to "make slide A look like slide B" or harmonize a sequence of slides, call `ppt_compare_slides` with `reference_slide` and `target_slides`.
 18. **Preserve target content during style matching**: Copy only layout, geometry, and styling from the reference slide; keep the target slide's text and assets intact (`preserve_content=True`).
+19. **Images & Media**: Never write custom python-pptx scripts merely to insert or replace an image. Use `ppt_add_picture` (supports PNG, JPG, BMP with automatic aspect ratio calculation) and `ppt_replace_picture` (replaces picture content or placeholder while preserving exact coordinates, bounds, and rotation).
+20. **First-Class Table Operations**: Never write custom python-pptx scripts to edit or format tables.
+    - Inspect with `ppt_inspect_table` for compact cell grid overviews.
+    - Mutate cells in batch with `ppt_batch_modify_table_cells`.
+    - Set table bounds, column widths, or row heights with `ppt_set_table_geometry`.
+    - Apply formatting across ranges, rows, columns, or entire tables with `ppt_style_table`.
+    - Merge cells with `ppt_merge_table_cells`.
+    - Execute multi-table, multi-slide changes in one transaction with `ppt_batch_modify_tables`.
+21. **Strict PATCH Semantics**: When modifying geometry via `ppt_modify_shape` or `ppt_batch_modify_shapes`, only provide the fields you intend to change. Omitted dimensions or coordinates are never reset or zeroed out.
+22. **Multi-Slide Validation**: Use `ppt_validate_slides` to inspect defect counts across all modified slides in a single call before final rendering and saving.
 
 ---
 

@@ -78,6 +78,32 @@ class BaseRenderer(ABC):
         """
         ...
 
+    def render_slides(
+        self,
+        presentation_path: Union[str, Path],
+        slide_numbers: List[int],
+        output_dir: Union[str, Path],
+        width: int = 1920,
+        height: int = 1080,
+    ) -> Dict[int, str]:
+        """Render a specific list of slides to PNG files.
+
+        Args:
+            presentation_path: Path to presentation.
+            slide_numbers: List of 1-indexed slide numbers.
+            output_dir: Directory where slide PNG files will be written.
+            width: Output image width in pixels.
+            height: Output image height in pixels.
+
+        Returns:
+            Dictionary mapping slide number to absolute path string.
+        """
+        results: Dict[int, str] = {}
+        for s_num in slide_numbers:
+            out_p = Path(output_dir) / f"slide_{s_num}.png"
+            results[s_num] = self.render_slide(presentation_path, s_num, out_p, width, height)
+        return results
+
 
 def _render_slide_inner(
     ppt_app: Any, prs_path: Path, slide_number: int, out_path: Path, width: int, height: int
@@ -178,6 +204,70 @@ def _com_export_presentation(
     return results
 
 
+def _render_slides_inner(
+    ppt_app: Any,
+    prs_path: Path,
+    out_dir: Path,
+    slide_numbers: List[int],
+    width: int,
+    height: int,
+) -> Dict[int, str]:
+    import pythoncom
+
+    rendered_map: Dict[int, str] = {}
+    presentations = ppt_app.Presentations
+    # Open(FileName, ReadOnly=-1, Untitled=0, WithWindow=0)
+    presentation = presentations.Open(str(prs_path), -1, 0, 0)
+    try:
+        slides = presentation.Slides
+        total_count = slides.Count
+        for idx in slide_numbers:
+            if idx < 1 or idx > total_count:
+                raise IndexError(f"Slide number {idx} is out of range (1..{total_count})")
+            slide_out = out_dir / f"slide_{idx}.png"
+            slide = slides.Item(idx)
+            try:
+                slide.Export(str(slide_out), "PNG", int(width), int(height))
+            finally:
+                del slide
+            if not slide_out.exists() or slide_out.stat().st_size == 0:
+                raise RuntimeError(
+                    f"PowerPoint COM export failed for slide {idx} at: {slide_out}"
+                )
+            rendered_map[idx] = str(slide_out)
+        del slides
+    finally:
+        try:
+            presentation.Saved = -1
+            presentation.Close()
+        except Exception:
+            pass
+        del presentation
+        del presentations
+        try:
+            pythoncom.PumpWaitingMessages()
+        except Exception:
+            pass
+        gc.collect()
+    return rendered_map
+
+
+def _com_export_slides(
+    prs_path: Path,
+    out_dir: Path,
+    slide_numbers: List[int],
+    width: int,
+    height: int,
+) -> Dict[int, str]:
+    from powerpoint_mcp.rendering.com_lifecycle import com_powerpoint_session
+
+    results: Dict[int, str] = {}
+    with com_powerpoint_session() as (app, _):
+        results = _render_slides_inner(app, prs_path, out_dir, slide_numbers, width, height)
+        del app
+    return results
+
+
 class PowerPointRenderer(BaseRenderer):
     """Native Microsoft PowerPoint COM automation renderer on Windows.
 
@@ -271,6 +361,28 @@ class PowerPointRenderer(BaseRenderer):
         out_dir.mkdir(parents=True, exist_ok=True)
 
         return _com_export_presentation(prs_path, out_dir, width, height)
+
+    def render_slides(
+        self,
+        presentation_path: Union[str, Path],
+        slide_numbers: List[int],
+        output_dir: Union[str, Path],
+        width: int = 1920,
+        height: int = 1080,
+    ) -> Dict[int, str]:
+        if not self.is_available:
+            raise RuntimeError(
+                "PowerPoint COM renderer is not available on this platform or PowerPoint is not installed."
+            )
+
+        prs_path = Path(presentation_path).resolve()
+        if not prs_path.exists():
+            raise FileNotFoundError(f"Presentation file does not exist: {prs_path}")
+
+        out_dir = Path(output_dir).resolve()
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        return _com_export_slides(prs_path, out_dir, slide_numbers, width, height)
 
 
 class LibreOfficeRenderer(BaseRenderer):

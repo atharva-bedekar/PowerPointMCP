@@ -12,9 +12,12 @@ import anyio
 from mcp.server.mcpserver import MCPServer
 
 from powerpoint_mcp.tools.editing import (
+    ppt_add_picture,
     ppt_align_shapes,
     ppt_apply_style,
     ppt_batch_modify_shapes,
+    ppt_batch_modify_table_cells,
+    ppt_batch_modify_tables,
     ppt_batch_modify_text,
     ppt_copy_shape,
     ppt_create_flow_diagram,
@@ -23,6 +26,7 @@ from powerpoint_mcp.tools.editing import (
     ppt_delete_shape,
     ppt_distribute_shapes,
     ppt_equalize_sizes,
+    ppt_merge_table_cells,
     ppt_modify_ooxml,
     ppt_modify_shape,
     ppt_modify_text,
@@ -30,11 +34,14 @@ from powerpoint_mcp.tools.editing import (
     ppt_move_container,
     ppt_move_shape,
     ppt_reflow_container,
+    ppt_replace_picture,
     ppt_resize_component,
     ppt_resize_container,
     ppt_resize_shape,
     ppt_scale_slide_typography,
+    ppt_set_table_geometry,
     ppt_space_shapes,
+    ppt_style_table,
     ppt_sync_component,
     ppt_sync_layout,
     ppt_sync_slide_chrome,
@@ -48,8 +55,10 @@ from powerpoint_mcp.tools.inspection import (
     ppt_inspect_presentation,
     ppt_inspect_shape,
     ppt_inspect_slide,
+    ppt_inspect_table,
     ppt_inspect_text,
     ppt_validate_slide,
+    ppt_validate_slides,
 )
 
 from powerpoint_mcp.tools.rendering import (
@@ -507,6 +516,65 @@ def tool_analyze_containers(
         slide_number=slide_number,
         presentation_path=presentation_path,
     )
+
+
+@app.tool(
+    name="ppt_inspect_table",
+    description=(
+        "Inspect a PowerPoint table at the cell level. Returns grid dimensions, column widths, row heights, "
+        "bounding box, and cell content/formatting in compact or full diagnostic mode."
+    ),
+)
+def tool_inspect_table(
+    slide_number: int,
+    table_shape_id: Optional[int] = None,
+    detail: str = "compact",
+    presentation_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Inspect a PowerPoint table at the cell level.
+
+    Args:
+        slide_number: 1-indexed slide number.
+        table_shape_id: Optional ID of specific table shape. If omitted, finds first table on slide.
+        detail: 'compact' (default grid overview) or 'full' (cell-by-cell attributes).
+        presentation_path: Presentation path (defaults to active session).
+    """
+    return ppt_inspect_table(
+        slide_number=slide_number,
+        table_shape_id=table_shape_id,
+        detail=detail,
+        presentation_path=presentation_path,
+    )
+
+
+@app.tool(
+    name="ppt_validate_slides",
+    description=(
+        "Run validation across multiple slides (or the entire presentation), returning compact per-slide summaries "
+        "of layout defects, overlaps, boundary violations, and table overflow issues."
+    ),
+)
+def tool_validate_slides(
+    slide_numbers: Optional[List[int]] = None,
+    detail: bool = False,
+    rules: Optional[List[str]] = None,
+    presentation_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Validate multiple slides in batch.
+
+    Args:
+        slide_numbers: List of 1-indexed slide numbers. If omitted, validates all slides.
+        detail: Return compact counts (False) or full finding lists (True).
+        rules: Optional list of rule IDs to check (e.g. ['VAL-01', 'TABLE-01']).
+        presentation_path: Presentation path (defaults to active session).
+    """
+    return ppt_validate_slides(
+        slide_numbers=slide_numbers,
+        detail=detail,
+        rules=rules,
+        presentation_path=presentation_path,
+    )
+
 
 
 # =============================================================================
@@ -1669,6 +1737,243 @@ def tool_resize_component(
         reflow_children=reflow_children,
         presentation_path=presentation_path,
     )
+
+
+@app.tool(
+    name="ppt_add_picture",
+    description=(
+        "Insert an image (PNG, JPEG, BMP) onto a slide with exact coordinates and aspect ratio handling. "
+        "Calculates dimensions automatically if width or height is omitted."
+    ),
+)
+def tool_add_picture(
+    slide_number: int,
+    image_path: str,
+    left: float,
+    top: float,
+    width: Optional[float] = None,
+    height: Optional[float] = None,
+    preserve_aspect_ratio: bool = True,
+    presentation_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Insert an image onto a slide.
+
+    Args:
+        slide_number: 1-indexed slide number.
+        image_path: Path to the image file.
+        left: Left coordinate in inches.
+        top: Top coordinate in inches.
+        width: Target width in inches (optional).
+        height: Target height in inches (optional).
+        preserve_aspect_ratio: Maintain native aspect ratio (default True).
+        presentation_path: Presentation path (defaults to active session).
+    """
+    return ppt_add_picture(
+        slide_number=slide_number,
+        image_path=image_path,
+        left=left,
+        top=top,
+        width=width,
+        height=height,
+        preserve_aspect_ratio=preserve_aspect_ratio,
+        presentation_path=presentation_path,
+    )
+
+
+@app.tool(
+    name="ppt_replace_picture",
+    description=(
+        "Replace an existing picture shape or placeholder rectangle with a new image, preserving original "
+        "geometry (position, size, and rotation)."
+    ),
+)
+def tool_replace_picture(
+    slide_number: int,
+    shape_id: int,
+    image_path: str,
+    preserve_geometry: bool = True,
+    presentation_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Replace an existing picture or placeholder with a new image.
+
+    Args:
+        slide_number: 1-indexed slide number.
+        shape_id: ID of the existing shape or placeholder.
+        image_path: Path to the new replacement image.
+        preserve_geometry: Retain original bounds and rotation (default True).
+        presentation_path: Presentation path (defaults to active session).
+    """
+    return ppt_replace_picture(
+        slide_number=slide_number,
+        shape_id=shape_id,
+        image_path=image_path,
+        preserve_geometry=preserve_geometry,
+        presentation_path=presentation_path,
+    )
+
+
+@app.tool(
+    name="ppt_batch_modify_table_cells",
+    description=(
+        "Batch modify multiple cells in a PowerPoint table atomically. Supports updating cell text, font size, "
+        "bold, italic, font family, font color, cell background fill, and horizontal/vertical alignment."
+    ),
+)
+def tool_batch_modify_table_cells(
+    slide_number: int,
+    table_shape_id: int,
+    mutations: List[Dict[str, Any]],
+    presentation_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Batch modify table cells.
+
+    Args:
+        slide_number: 1-indexed slide number.
+        table_shape_id: ID of the table shape.
+        mutations: List of cell mutation dicts with row, column, text, and optional styles.
+        presentation_path: Presentation path (defaults to active session).
+    """
+    return ppt_batch_modify_table_cells(
+        slide_number=slide_number,
+        table_shape_id=table_shape_id,
+        mutations=mutations,
+        presentation_path=presentation_path,
+    )
+
+
+@app.tool(
+    name="ppt_set_table_geometry",
+    description=(
+        "Modify table bounding box, column widths, or row heights with PATCH semantics. "
+        "Only explicitly provided properties are altered."
+    ),
+)
+def tool_set_table_geometry(
+    slide_number: int,
+    table_shape_id: int,
+    left: Optional[float] = None,
+    top: Optional[float] = None,
+    width: Optional[float] = None,
+    height: Optional[float] = None,
+    column_widths: Optional[List[float]] = None,
+    row_heights: Optional[List[float]] = None,
+    presentation_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Modify table geometry and column/row dimensions.
+
+    Args:
+        slide_number: 1-indexed slide number.
+        table_shape_id: ID of the table shape.
+        left: Left position in inches.
+        top: Top position in inches.
+        width: Total width in inches.
+        height: Total height in inches.
+        column_widths: List of individual column widths in inches.
+        row_heights: List of individual row heights in inches.
+        presentation_path: Presentation path (defaults to active session).
+    """
+    return ppt_set_table_geometry(
+        slide_number=slide_number,
+        table_shape_id=table_shape_id,
+        left=left,
+        top=top,
+        width=width,
+        height=height,
+        column_widths=column_widths,
+        row_heights=row_heights,
+        presentation_path=presentation_path,
+    )
+
+
+@app.tool(
+    name="ppt_style_table",
+    description=(
+        "Apply formatting (fill, fonts, alignment, margins, borders) to an entire table or specific cell range "
+        "(e.g. 'all', 'row:0', 'col:1', '0:0-1:2')."
+    ),
+)
+def tool_style_table(
+    slide_number: int,
+    table_shape_id: int,
+    range: Optional[str] = None,
+    style: Optional[Dict[str, Any]] = None,
+    presentation_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Apply styling to a table or range of cells.
+
+    Args:
+        slide_number: 1-indexed slide number.
+        table_shape_id: ID of the table shape.
+        range: Range selector ('all', '0:0', '0:0-1:2', 'row:0', 'col:1').
+        style: Dictionary with styling properties (fill, font_name, font_size, bold, italic, font_color, alignment, margins, borders).
+        presentation_path: Presentation path (defaults to active session).
+    """
+    return ppt_style_table(
+        slide_number=slide_number,
+        table_shape_id=table_shape_id,
+        range=range,
+        style=style,
+        presentation_path=presentation_path,
+    )
+
+
+@app.tool(
+    name="ppt_merge_table_cells",
+    description="Merge a rectangular block of cells in a PowerPoint table.",
+)
+def tool_merge_table_cells(
+    slide_number: int,
+    table_shape_id: int,
+    start_row: int,
+    start_column: int,
+    end_row: int,
+    end_column: int,
+    presentation_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Merge cells in a table.
+
+    Args:
+        slide_number: 1-indexed slide number.
+        table_shape_id: ID of the table shape.
+        start_row: Top row index (0-indexed).
+        start_column: Left column index (0-indexed).
+        end_row: Bottom row index (0-indexed).
+        end_column: Right column index (0-indexed).
+        presentation_path: Presentation path (defaults to active session).
+    """
+    return ppt_merge_table_cells(
+        slide_number=slide_number,
+        table_shape_id=table_shape_id,
+        start_row=start_row,
+        start_column=start_column,
+        end_row=end_row,
+        end_column=end_column,
+        presentation_path=presentation_path,
+    )
+
+
+@app.tool(
+    name="ppt_batch_modify_tables",
+    description=(
+        "Execute multi-table mutations across one or multiple slides in a single atomic transaction. "
+        "Supports cells, geometry, styles, and merges."
+    ),
+)
+def tool_batch_modify_tables(
+    operations: List[Dict[str, Any]],
+    presentation_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Batch modify multiple tables across slides.
+
+    Args:
+        operations: List of table operation dicts (each specifying slide, table, cells, geometry, styles, merge).
+        presentation_path: Presentation path (defaults to active session).
+    """
+    return ppt_batch_modify_tables(
+        operations=operations,
+        presentation_path=presentation_path,
+    )
+
 
 
 # =============================================================================

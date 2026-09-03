@@ -325,9 +325,25 @@ def extract_shape_properties(shape: Any) -> Dict[str, Any]:
     if getattr(shape, "has_table", False):
         try:
             table = shape.table
+            row_heights = [emu_to_inches(r.height) for r in table.rows]
+            col_widths = [emu_to_inches(c.width) for c in table.columns]
+            cells_info = []
+            for r_idx, row in enumerate(table.rows):
+                for c_idx, col in enumerate(table.columns):
+                    c = table.cell(r_idx, c_idx)
+                    cells_info.append({
+                        "row": r_idx,
+                        "column": c_idx,
+                        "text": c.text.strip(),
+                        "is_merge_origin": getattr(c, "is_merge_origin", False),
+                        "is_spanned": getattr(c, "is_spanned", False),
+                    })
             props["table"] = {
                 "rows": len(table.rows),
                 "columns": len(table.columns),
+                "row_heights": row_heights,
+                "column_widths": col_widths,
+                "cells": cells_info,
             }
         except Exception:
             pass

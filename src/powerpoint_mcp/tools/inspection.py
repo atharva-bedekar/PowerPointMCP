@@ -26,6 +26,7 @@ from powerpoint_mcp.pptx.structure import (
 from powerpoint_mcp.rendering.visual_compare import compare_slides
 from powerpoint_mcp.tools.versioning import get_session_manager, resolve_active_target
 from powerpoint_mcp.utils.validation import validate_slide
+from powerpoint_mcp.pptx.tables import inspect_table_cells
 
 
 def handle_tool_errors(func):
@@ -541,4 +542,107 @@ def ppt_analyze_containers(
 
     target_path = _resolve_presentation_path(presentation_path)
     return analyze_containers(target_path, slide_number)
+
+
+@handle_tool_errors
+def ppt_inspect_table(
+    slide_number: int,
+    table_shape_id: Optional[int] = None,
+    detail: str = "compact",
+    presentation_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Inspect a PowerPoint table at the cell level.
+
+    Args:
+        slide_number: 1-indexed slide number.
+        table_shape_id: Optional ID of the specific table shape. If omitted, finds first table on slide.
+        detail: 'compact' (default, agent-friendly grid and bbox overview) or 'full' (cell-by-cell attributes).
+        presentation_path: Path to presentation. If omitted, uses active session.
+
+    Returns:
+        Structured dictionary detailing table grid, dimensions, cell contents, and column/row measurements.
+    """
+    if slide_number < 1:
+        raise IndexError(f"Slide number must be >= 1, got {slide_number}")
+
+    target_path = _resolve_presentation_path(presentation_path)
+    prs = Presentation(target_path)
+
+    if slide_number > len(prs.slides):
+        raise IndexError(f"Slide number {slide_number} out of range (1..{len(prs.slides)})")
+
+    slide = prs.slides[slide_number - 1]
+    res = inspect_table_cells(slide, table_shape_id=table_shape_id, detail=detail)
+
+    return {
+        "success": True,
+        "slide_number": slide_number,
+        **res,
+    }
+
+
+@handle_tool_errors
+def ppt_validate_slides(
+    slide_numbers: Optional[List[int]] = None,
+    detail: bool = False,
+    rules: Optional[List[str]] = None,
+    presentation_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Validate multiple slides across a presentation, returning compact per-slide summaries.
+
+    Args:
+        slide_numbers: Optional list of 1-indexed slide numbers. If omitted or empty, validates all slides.
+        detail: If False (default), returns compact error/warning counts per slide. If True, includes full findings.
+        rules: Optional list of rule IDs to evaluate (e.g. ['VAL-01', 'TABLE-01']).
+        presentation_path: Path to presentation. If omitted, uses active session.
+
+    Returns:
+        Structured multi-slide validation summary with totals and per-slide results.
+    """
+    target_path = _resolve_presentation_path(presentation_path)
+    prs = Presentation(target_path)
+    total_slides = len(prs.slides)
+
+    if slide_numbers:
+        target_indices = []
+        for s in slide_numbers:
+            if s < 1 or s > total_slides:
+                raise IndexError(f"Slide number {s} out of range (1..{total_slides})")
+            target_indices.append(s)
+    else:
+        target_indices = list(range(1, total_slides + 1))
+
+    slide_results = []
+    total_errors = 0
+    total_warnings = 0
+    compact_lines = []
+
+    for s_num in target_indices:
+        slide_model = inspect_slide(target_path, s_num)
+        res = validate_slide(slide_model, rules=rules)
+        total_errors += res.error_count
+        total_warnings += res.warning_count
+
+        compact_lines.append(f"Slide {s_num}: errors: {res.error_count}, warnings: {res.warning_count}")
+
+        if detail:
+            slide_results.append(res.to_dict(detail="full"))
+        else:
+            slide_results.append({
+                "slide_number": s_num,
+                "valid": res.is_valid,
+                "errors": res.error_count,
+                "warnings": res.warning_count,
+                "summary": res.get_summary_counts(),
+            })
+
+    return {
+        "success": True,
+        "total_slides_validated": len(target_indices),
+        "total_errors": total_errors,
+        "total_warnings": total_warnings,
+        "summary": "\n".join(compact_lines),
+        "slides": slide_results,
+    }
+
 

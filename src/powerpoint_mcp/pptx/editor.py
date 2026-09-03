@@ -235,7 +235,13 @@ def modify_shape(
     """
     slide, shape = _resolve_target(slide_or_prs, arg1, arg2)
 
-    # Apply absolute coordinates / dimensions
+    # Enforce positive dimensions for explicit values
+    if width is not None and width <= 0:
+        raise ValueError(f"Shape width must be positive, got {width}")
+    if height is not None and height <= 0:
+        raise ValueError(f"Shape height must be positive, got {height}")
+
+    # Apply absolute coordinates / dimensions (only if explicitly provided)
     if x is not None:
         shape.left = inches_to_emu(x)
     if y is not None:
@@ -251,9 +257,15 @@ def modify_shape(
     if dy is not None:
         shape.top = int(shape.top) + inches_to_emu(dy)
     if dwidth is not None:
-        shape.width = int(shape.width) + inches_to_emu(dwidth)
+        new_w = int(shape.width) + inches_to_emu(dwidth)
+        if new_w <= 0:
+            raise ValueError(f"Resulting width after dwidth {dwidth} must be positive, got {emu_to_inches(new_w)}")
+        shape.width = new_w
     if dheight is not None:
-        shape.height = int(shape.height) + inches_to_emu(dheight)
+        new_h = int(shape.height) + inches_to_emu(dheight)
+        if new_h <= 0:
+            raise ValueError(f"Resulting height after dheight {dheight} must be positive, got {emu_to_inches(new_h)}")
+        shape.height = new_h
 
     # Apply rotation
     if rotation is not None:

@@ -257,21 +257,44 @@ def ppt_render_slides(
     for s_num in slide_numbers:
         if s_num < 1:
             raise IndexError(f"Slide number must be >= 1, got {s_num}")
-        res = ppt_render_slide(
-            slide_number=s_num,
-            output_dir=str(out_dir_path),
-            renderer=renderer,
-            dpi=dpi,
-            presentation_path=target_path,
-        )
-        if res.get("success"):
-            img_path = res.get("image_path")
-            rendered_slides.append({
-                "slide_number": s_num,
-                "image_path": img_path,
-            })
-            images_map[s_num] = img_path
-            renderer_name = res.get("renderer", renderer_name)
+
+    renderer_inst = get_available_renderer(renderer)
+    width_px = int(round(13.333 * dpi))
+    height_px = int(round(7.5 * dpi))
+
+    rendered_map: Dict[int, str] = {}
+    if renderer_inst.is_available and hasattr(renderer_inst, "render_slides"):
+        try:
+            rendered_map = renderer_inst.render_slides(
+                presentation_path=target_path,
+                slide_numbers=slide_numbers,
+                output_dir=out_dir_path,
+                width=width_px,
+                height=height_px,
+            )
+            renderer_name = renderer_inst.renderer_name
+        except Exception:
+            rendered_map = {}
+
+    if not rendered_map:
+        for s_num in slide_numbers:
+            res = ppt_render_slide(
+                slide_number=s_num,
+                output_dir=str(out_dir_path),
+                renderer=renderer,
+                dpi=dpi,
+                presentation_path=target_path,
+            )
+            if res.get("success"):
+                img_path = res.get("image_path")
+                rendered_map[s_num] = img_path
+                renderer_name = res.get("renderer", renderer_name)
+
+    for s_num in slide_numbers:
+        img_p = rendered_map.get(s_num)
+        if img_p:
+            rendered_slides.append({"slide_number": s_num, "image_path": img_p})
+            images_map[s_num] = img_p
 
     return {
         "success": True,

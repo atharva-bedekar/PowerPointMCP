@@ -20,8 +20,15 @@ from powerpoint_mcp.models.shape import (
 from powerpoint_mcp.pptx.cards import create_structured_card_list
 from powerpoint_mcp.pptx.component_ops import move_component, resize_component
 from powerpoint_mcp.pptx.diagrams import create_flow_diagram
+from powerpoint_mcp.pptx.pictures import add_picture, replace_picture
 from powerpoint_mcp.pptx.stepper import create_stepper, update_stepper
 from powerpoint_mcp.pptx.sync import sync_component, sync_layout, sync_slide_chrome
+from powerpoint_mcp.pptx.tables import (
+    batch_modify_table_cells,
+    merge_table_cells,
+    set_table_geometry,
+    style_table,
+)
 from powerpoint_mcp.pptx.editor import (
     copy_shape,
     delete_shape,
@@ -1995,5 +2002,456 @@ def ppt_resize_component(
         "target": "working" if session else "standalone",
         **res,
     }
+
+
+@handle_tool_errors
+def ppt_add_picture(
+    slide_number: int,
+    image_path: str,
+    left: float,
+    top: float,
+    width: Optional[float] = None,
+    height: Optional[float] = None,
+    preserve_aspect_ratio: bool = True,
+    presentation_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Insert an image (PNG, JPEG, BMP) onto a slide with exact coordinates and aspect ratio handling.
+
+    Args:
+        slide_number: 1-indexed slide number.
+        image_path: Path to the image file.
+        left: Left position in inches.
+        top: Top position in inches.
+        width: Target width in inches (optional, computed from aspect ratio if omitted).
+        height: Target height in inches (optional, computed from aspect ratio if omitted).
+        preserve_aspect_ratio: Maintain native aspect ratio (default True).
+        presentation_path: Presentation path. If omitted, uses active session.
+
+    Returns:
+        Dictionary with created shape_id, final geometry, and image dimensions.
+    """
+    if width is not None and width <= 0:
+        raise ValueError(f"Picture width must be positive, got {width}")
+    if height is not None and height <= 0:
+        raise ValueError(f"Picture height must be positive, got {height}")
+
+    target_path, prs, session = _get_target_presentation(
+        presentation_path=presentation_path, operation="add_picture"
+    )
+
+    if slide_number < 1 or slide_number > len(prs.slides):
+        raise IndexError(f"Slide number {slide_number} is out of range (1..{len(prs.slides)})")
+
+    slide = prs.slides[slide_number - 1]
+    res = add_picture(
+        slide=slide,
+        image_path=image_path,
+        left=left,
+        top=top,
+        width=width,
+        height=height,
+        preserve_aspect_ratio=preserve_aspect_ratio,
+    )
+
+    _save_presentation(prs, target_path)
+    if session:
+        session.save_metadata()
+
+    return {
+        "success": True,
+        "slide_number": slide_number,
+        "session_id": session.session_id if session else None,
+        "target": "working" if session else "standalone",
+        **res,
+    }
+
+
+@handle_tool_errors
+def ppt_replace_picture(
+    slide_number: int,
+    shape_id: int,
+    image_path: str,
+    preserve_geometry: bool = True,
+    presentation_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Replace an existing picture shape or placeholder with a new image while preserving geometry.
+
+    Args:
+        slide_number: 1-indexed slide number.
+        shape_id: ID of the existing shape or placeholder to replace.
+        image_path: Path to the new replacement image.
+        preserve_geometry: Keep original left, top, width, height, and rotation (default True).
+        presentation_path: Presentation path. If omitted, uses active session.
+
+    Returns:
+        Dictionary with updated shape details and image metadata.
+    """
+    target_path, prs, session = _get_target_presentation(
+        presentation_path=presentation_path, operation=f"replace_picture_{shape_id}"
+    )
+
+    if slide_number < 1 or slide_number > len(prs.slides):
+        raise IndexError(f"Slide number {slide_number} is out of range (1..{len(prs.slides)})")
+
+    slide = prs.slides[slide_number - 1]
+    res = replace_picture(
+        slide=slide,
+        shape_id=shape_id,
+        image_path=image_path,
+        preserve_geometry=preserve_geometry,
+    )
+
+    _save_presentation(prs, target_path)
+    if session:
+        session.save_metadata()
+
+    return {
+        "success": True,
+        "slide_number": slide_number,
+        "session_id": session.session_id if session else None,
+        "target": "working" if session else "standalone",
+        **res,
+    }
+
+
+@handle_tool_errors
+def ppt_batch_modify_table_cells(
+    slide_number: int,
+    table_shape_id: int,
+    mutations: List[Dict[str, Any]],
+    presentation_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Batch modify multiple table cells atomically with text and cell formatting.
+
+    Args:
+        slide_number: 1-indexed slide number.
+        table_shape_id: ID of the table shape.
+        mutations: List of cell mutation dicts. Each dict supports:
+            - row: 0-indexed row number (required)
+            - column: 0-indexed column number (required)
+            - text: Text content (optional)
+            - font_size: Font size in pt (optional)
+            - font_name: Font family name (optional)
+            - bold: Bold flag (optional)
+            - italic: Italic flag (optional)
+            - font_color: Font color hex string e.g. '#FFFFFF' (optional)
+            - fill: Cell background color hex string e.g. '#1E3A8A' (optional)
+            - align: Horizontal alignment ('left', 'center', 'right', 'justify') (optional)
+            - vertical_align: Vertical alignment ('top', 'middle', 'bottom') (optional)
+        presentation_path: Presentation path. If omitted, uses active session.
+
+    Returns:
+        Structured execution report detailing modified cells.
+    """
+    target_path, prs, session = _get_target_presentation(
+        presentation_path=presentation_path, operation=f"table_cells_s{slide_number}_t{table_shape_id}"
+    )
+
+    if slide_number < 1 or slide_number > len(prs.slides):
+        raise IndexError(f"Slide number {slide_number} is out of range (1..{len(prs.slides)})")
+
+    slide = prs.slides[slide_number - 1]
+    res = batch_modify_table_cells(slide=slide, table_shape_id=table_shape_id, mutations=mutations)
+
+    _save_presentation(prs, target_path)
+    if session:
+        session.save_metadata()
+
+    return {
+        "success": True,
+        "slide_number": slide_number,
+        "session_id": session.session_id if session else None,
+        "target": "working" if session else "standalone",
+        **res,
+    }
+
+
+@handle_tool_errors
+def ppt_set_table_geometry(
+    slide_number: int,
+    table_shape_id: int,
+    left: Optional[float] = None,
+    top: Optional[float] = None,
+    width: Optional[float] = None,
+    height: Optional[float] = None,
+    column_widths: Optional[List[float]] = None,
+    row_heights: Optional[List[float]] = None,
+    presentation_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Modify table bounding box, column widths, or row heights with PATCH semantics.
+
+    Args:
+        slide_number: 1-indexed slide number.
+        table_shape_id: ID of target table shape.
+        left: Left position in inches (optional).
+        top: Top position in inches (optional).
+        width: Total width in inches (optional).
+        height: Total height in inches (optional).
+        column_widths: List of individual column widths in inches (optional).
+        row_heights: List of individual row heights in inches (optional).
+        presentation_path: Presentation path. If omitted, uses active session.
+
+    Returns:
+        Updated table geometry, column widths, and row heights.
+    """
+    target_path, prs, session = _get_target_presentation(
+        presentation_path=presentation_path, operation=f"table_geometry_s{slide_number}_t{table_shape_id}"
+    )
+
+    if slide_number < 1 or slide_number > len(prs.slides):
+        raise IndexError(f"Slide number {slide_number} is out of range (1..{len(prs.slides)})")
+
+    slide = prs.slides[slide_number - 1]
+    res = set_table_geometry(
+        slide=slide,
+        table_shape_id=table_shape_id,
+        left=left,
+        top=top,
+        width=width,
+        height=height,
+        column_widths=column_widths,
+        row_heights=row_heights,
+    )
+
+    _save_presentation(prs, target_path)
+    if session:
+        session.save_metadata()
+
+    return {
+        "success": True,
+        "slide_number": slide_number,
+        "session_id": session.session_id if session else None,
+        "target": "working" if session else "standalone",
+        **res,
+    }
+
+
+@handle_tool_errors
+def ppt_style_table(
+    slide_number: int,
+    table_shape_id: int,
+    range: Optional[str] = None,
+    style: Optional[Dict[str, Any]] = None,
+    presentation_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Apply styling (fill, fonts, alignment, margins, borders) to a table or specific cell range.
+
+    Args:
+        slide_number: 1-indexed slide number.
+        table_shape_id: ID of target table shape.
+        range: Target range specification:
+            - 'all' or None: entire table
+            - '0:0': single cell (row 0, col 0)
+            - '0:0-1:2': rectangular block from (0,0) to (1,2)
+            - 'row:0': entire row 0
+            - 'col:1': entire column 1
+        style: Dictionary with formatting properties:
+            - fill: Background color hex string e.g. '#1E3A8A'
+            - font_name: Font family name e.g. 'Calibri'
+            - font_size: Font size in pt
+            - bold: True / False
+            - italic: True / False
+            - font_color: Font color hex string e.g. '#FFFFFF'
+            - horizontal_alignment: 'left', 'center', 'right', 'justify'
+            - vertical_alignment: 'top', 'middle', 'bottom'
+            - margins: {'left': 0.1, 'right': 0.1, 'top': 0.05, 'bottom': 0.05} (in inches)
+            - borders: {'color': 'CCCCCC', 'width': 1.0, 'sides': ['top', 'bottom', 'left', 'right']}
+        presentation_path: Presentation path. If omitted, uses active session.
+
+    Returns:
+        Summary of styled cells and range.
+    """
+    target_path, prs, session = _get_target_presentation(
+        presentation_path=presentation_path, operation=f"style_table_s{slide_number}_t{table_shape_id}"
+    )
+
+    if slide_number < 1 or slide_number > len(prs.slides):
+        raise IndexError(f"Slide number {slide_number} is out of range (1..{len(prs.slides)})")
+
+    slide = prs.slides[slide_number - 1]
+    res = style_table(
+        slide=slide,
+        table_shape_id=table_shape_id,
+        range_spec=range,
+        style=style,
+    )
+
+    _save_presentation(prs, target_path)
+    if session:
+        session.save_metadata()
+
+    return {
+        "success": True,
+        "slide_number": slide_number,
+        "session_id": session.session_id if session else None,
+        "target": "working" if session else "standalone",
+        **res,
+    }
+
+
+@handle_tool_errors
+def ppt_merge_table_cells(
+    slide_number: int,
+    table_shape_id: int,
+    start_row: int,
+    start_column: int,
+    end_row: int,
+    end_column: int,
+    presentation_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Merge a rectangular block of cells in a PowerPoint table.
+
+    Args:
+        slide_number: 1-indexed slide number.
+        table_shape_id: ID of target table shape.
+        start_row: Top row index (0-indexed).
+        start_column: Left column index (0-indexed).
+        end_row: Bottom row index (0-indexed).
+        end_column: Right column index (0-indexed).
+        presentation_path: Presentation path. If omitted, uses active session.
+
+    Returns:
+        Confirmation of merged range and origin cell status.
+    """
+    target_path, prs, session = _get_target_presentation(
+        presentation_path=presentation_path, operation=f"merge_cells_s{slide_number}_t{table_shape_id}"
+    )
+
+    if slide_number < 1 or slide_number > len(prs.slides):
+        raise IndexError(f"Slide number {slide_number} is out of range (1..{len(prs.slides)})")
+
+    slide = prs.slides[slide_number - 1]
+    res = merge_table_cells(
+        slide=slide,
+        table_shape_id=table_shape_id,
+        start_row=start_row,
+        start_column=start_column,
+        end_row=end_row,
+        end_column=end_column,
+    )
+
+    _save_presentation(prs, target_path)
+    if session:
+        session.save_metadata()
+
+    return {
+        "success": True,
+        "slide_number": slide_number,
+        "session_id": session.session_id if session else None,
+        "target": "working" if session else "standalone",
+        **res,
+    }
+
+
+@handle_tool_errors
+def ppt_batch_modify_tables(
+    operations: List[Dict[str, Any]],
+    presentation_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Execute multi-table mutations across one or multiple slides in a single atomic transaction.
+
+    Args:
+        operations: List of table operation dicts. Each dict supports:
+            - slide / slide_number: 1-indexed slide number (required)
+            - table / table_shape_id: Target table shape ID (required)
+            - cells: Optional list of cell mutations (row, column, text, formatting)
+            - geometry: Optional dict with left, top, width, height, column_widths, row_heights
+            - styles: Optional list of style dicts (with range and style) or single style dict
+            - merge: Optional dict with start_row, start_column, end_row, end_column
+        presentation_path: Presentation path. If omitted, uses active session.
+
+    Returns:
+        Structured batch summary with per-operation results.
+    """
+    if not operations:
+        raise ValueError("Operations list cannot be empty")
+
+    target_path, prs, session = _get_target_presentation(
+        presentation_path=presentation_path, operation=f"batch_modify_tables_{len(operations)}_ops"
+    )
+
+    total_slides = len(prs.slides)
+    op_results = []
+
+    # Step 1: Pre-validation of all operations
+    for idx, op in enumerate(operations):
+        if not isinstance(op, dict):
+            raise ValueError(f"Operation at index {idx} must be a dictionary")
+        s_num = op.get("slide", op.get("slide_number"))
+        if s_num is None:
+            raise ValueError(f"Operation at index {idx} missing 'slide' or 'slide_number'")
+        if s_num < 1 or s_num > total_slides:
+            raise IndexError(f"Slide number {s_num} in operation {idx} out of range (1..{total_slides})")
+        t_id = op.get("table", op.get("table_shape_id"))
+        if t_id is None:
+            raise ValueError(f"Operation at index {idx} missing 'table' or 'table_shape_id'")
+
+    # Step 2: Apply operations sequentially
+    for idx, op in enumerate(operations):
+        s_num = op.get("slide", op.get("slide_number"))
+        t_id = op.get("table", op.get("table_shape_id"))
+        slide = prs.slides[s_num - 1]
+
+        op_detail: Dict[str, Any] = {"operation_index": idx, "slide_number": s_num, "table_shape_id": t_id}
+
+        # Cells mutation
+        if "cells" in op and op["cells"]:
+            c_res = batch_modify_table_cells(slide, t_id, op["cells"])
+            op_detail["cells_mutations"] = c_res["mutations_applied"]
+
+        # Geometry
+        if "geometry" in op and isinstance(op["geometry"], dict):
+            g = op["geometry"]
+            g_res = set_table_geometry(
+                slide,
+                t_id,
+                left=g.get("left"),
+                top=g.get("top"),
+                width=g.get("width"),
+                height=g.get("height"),
+                column_widths=g.get("column_widths"),
+                row_heights=g.get("row_heights"),
+            )
+            op_detail["geometry_updated"] = True
+
+        # Styles
+        if "styles" in op:
+            styles_list = op["styles"] if isinstance(op["styles"], list) else [op["styles"]]
+            styled_count = 0
+            for st in styles_list:
+                if isinstance(st, dict):
+                    r_spec = st.get("range")
+                    s_dict = st.get("style", st)
+                    s_res = style_table(slide, t_id, range_spec=r_spec, style=s_dict)
+                    styled_count += s_res["styled_cells_count"]
+            op_detail["styled_cells"] = styled_count
+
+        # Merge
+        if "merge" in op and isinstance(op["merge"], dict):
+            m = op["merge"]
+            merge_res = merge_table_cells(
+                slide,
+                t_id,
+                start_row=m["start_row"],
+                start_column=m["start_column"],
+                end_row=m["end_row"],
+                end_column=m["end_column"],
+            )
+            op_detail["cells_merged"] = True
+
+        op_results.append(op_detail)
+
+    _save_presentation(prs, target_path)
+    if session:
+        session.save_metadata()
+
+    return {
+        "success": True,
+        "total_operations_applied": len(op_results),
+        "session_id": session.session_id if session else None,
+        "target": "working" if session else "standalone",
+        "operations": op_results,
+    }
+
 
 

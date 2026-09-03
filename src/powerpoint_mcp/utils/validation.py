@@ -90,6 +90,7 @@ class SlideValidationResult:
             "title_inconsistencies": sum(1 for i in self.issues if i.rule_id == "VAL-05"),
             "duplicate_objects": sum(1 for i in self.issues if i.rule_id == "VAL-06"),
             "extreme_rotations": sum(1 for i in self.issues if i.rule_id == "VAL-07"),
+            "table_issues": sum(1 for i in self.issues if i.rule_id.startswith("TABLE-")),
         }
 
     def to_dict(self, detail: str = "summary") -> Dict[str, Any]:
@@ -619,6 +620,123 @@ def _check_val_07_extreme_rotations(
     return issues
 
 
+def _check_table_rules(
+    shapes: List[ShapeModel],
+    slide_width_in: float,
+    slide_height_in: float,
+    tolerance_in: float = 0.05,
+) -> List[SlideIssue]:
+    """TABLE-01 & TABLE-02: Table boundary and cell content overflow validation."""
+    issues: List[SlideIssue] = []
+
+    for s in shapes:
+        is_table = (
+            s.shape_type == ShapeType.TABLE
+            or getattr(s, "table_metadata", None) is not None
+            or s.semantic_role == SemanticRole.TABLE
+        )
+        if not is_table:
+            continue
+
+        b = s.bbox
+        tbl = s.table_metadata or s.properties.get("table") or {}
+
+        # TABLE-01: Table Boundary Overflow
+        protrusions = {}
+        if b.bottom_inches > slide_height_in + tolerance_in:
+            protrusions["bottom"] = round(b.bottom_inches - slide_height_in, 2)
+        if b.right_inches > slide_width_in + tolerance_in:
+            protrusions["right"] = round(b.right_inches - slide_width_in, 2)
+        if b.left_inches < -tolerance_in:
+            protrusions["left"] = round(abs(b.left_inches), 2)
+        if b.top_inches < -tolerance_in:
+            protrusions["top"] = round(abs(b.top_inches), 2)
+
+        if protrusions:
+            primary_edge = max(protrusions.items(), key=lambda item: item[1])
+            edge_name, protrusion_val = primary_edge
+            msg = f"WARNING: Table {s.shape_id} extends {protrusion_val:.2f}\" {edge_name} of slide boundary."
+            issues.append(
+                SlideIssue(
+                    rule_id="TABLE-01",
+                    severity=IssueSeverity.WARNING,
+                    shape_ids=[s.shape_id],
+                    message=msg,
+                    details={
+                        "shape_id": s.shape_id,
+                        "protrusions": protrusions,
+                        "primary_boundary": edge_name,
+                        "max_protrusion_inches": protrusion_val,
+                    },
+                )
+            )
+
+        # TABLE-02: Row Height & Text Overflow
+        row_heights = tbl.get("row_heights", [])
+        col_widths = tbl.get("column_widths", [])
+        cells = tbl.get("cells", [])
+
+        if row_heights and col_widths and cells:
+            for c in cells:
+                r_idx = c.get("row", 0)
+                c_idx = c.get("column", 0)
+                text = c.get("text", "").strip()
+                if not text:
+                    continue
+
+                if r_idx >= len(row_heights) or c_idx >= len(col_widths):
+                    continue
+
+                row_h = row_heights[r_idx]
+                col_w = col_widths[c_idx]
+
+                # Estimate lines needed using word wrap approximation
+                font_size = 13.0
+                avg_char_w = (font_size / 72.0) * 0.50
+                line_h = (font_size / 72.0) * 1.25
+
+                avail_w = max(0.2, col_w - 0.2)
+                words = text.split()
+                lines = 1
+                cur_w = 0.0
+                for w in words:
+                    ww = len(w) * avg_char_w
+                    if ww > avail_w:
+                        lines += max(1, math.ceil(ww / avail_w)) - 1
+                        cur_w = 0.0
+                    elif cur_w + ww > avail_w:
+                        lines += 1
+                        cur_w = ww
+                    else:
+                        cur_w += ww + (avg_char_w * 0.8)
+
+                needed_h = max(0.2, lines * line_h + 0.1)
+                if needed_h > row_h * 1.35 and (needed_h - row_h) >= 0.15:
+                    msg = (
+                        f"WARNING: Table {s.shape_id} row {r_idx + 1} has insufficient height "
+                        f"({row_h:.2f}\") for its text (needs ~{needed_h:.2f}\")."
+                    )
+                    if not any(i.rule_id == "TABLE-02" and i.details.get("row") == r_idx + 1 for i in issues):
+                        issues.append(
+                            SlideIssue(
+                                rule_id="TABLE-02",
+                                severity=IssueSeverity.WARNING,
+                                shape_ids=[s.shape_id],
+                                message=msg,
+                                details={
+                                    "shape_id": s.shape_id,
+                                    "row": r_idx + 1,
+                                    "column": c_idx + 1,
+                                    "current_height": row_h,
+                                    "estimated_required_height": round(needed_h, 2),
+                                    "cell_text_sample": text[:30],
+                                },
+                            )
+                        )
+
+    return issues
+
+
 def validate_slide(
     slide_or_model: Union[SlideModel, Any],
     slide_number: int = 1,
@@ -697,14 +815,23 @@ def validate_slide(
     if active_rules is None or "VAL-07" in active_rules:
         all_issues.extend(_check_val_07_extreme_rotations(shapes))
 
+    # TABLE-01 & TABLE-02: Table Boundary and Content Overflow
+    if active_rules is None or "TABLE-01" in active_rules or "TABLE-02" in active_rules:
+        all_issues.extend(_check_table_rules(shapes, effective_width, effective_height))
+
     # Metrics calculation
     text_count = sum(1 for s in shapes if s.text_frame and s.text_frame.text)
     image_count = sum(1 for s in shapes if s.shape_type == ShapeType.PICTURE)
+    table_count = sum(
+        1 for s in shapes
+        if s.shape_type == ShapeType.TABLE or getattr(s, "table_metadata", None) or s.semantic_role == SemanticRole.TABLE
+    )
 
     metrics = {
         "shape_count": len(shapes),
         "text_shape_count": text_count,
         "image_shape_count": image_count,
+        "table_shape_count": table_count,
         "slide_dimensions": {
             "width_inches": effective_width,
             "height_inches": effective_height,
