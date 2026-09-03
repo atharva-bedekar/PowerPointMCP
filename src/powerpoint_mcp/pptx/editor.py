@@ -95,6 +95,26 @@ def _resolve_target(
     raise ValueError(f"Shape with ID {shape_id} not found on slide")
 
 
+def _find_shape_by_id(slide: Any, shape_id: int) -> Optional[Any]:
+    """Locate a shape on a slide by its integer shape ID."""
+    for shape in slide.shapes:
+        if shape.shape_id == shape_id:
+            return shape
+    return None
+
+
+def _delete_shape_from_slide(slide: Any, shape_id: int) -> bool:
+    """Delete a shape cleanly from a slide's spTree."""
+    shape = _find_shape_by_id(slide, shape_id)
+    if shape is not None:
+        elem = shape._element
+        parent = elem.getparent()
+        if parent is not None:
+            parent.remove(elem)
+            return True
+    return False
+
+
 def _hex_to_rgb(hex_str: str) -> Optional[RGBColor]:
     """Parse hex string to RGBColor object."""
     cleaned = hex_str.strip().lstrip("#").upper()

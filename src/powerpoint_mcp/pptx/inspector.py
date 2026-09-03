@@ -175,7 +175,8 @@ def infer_semantic_role(shape: Any, slide_width_emu: int, slide_height_emu: int)
             return SemanticRole.TITLE
 
         # Rule 3B: Subtitle Detection
-        if (0.15 <= norm_top < 0.38 and 14 <= max_font_size < 24) or ("Subtitle" in shape_name and norm_top < 0.45):
+        shape_h_norm = getattr(shape, "height", 0) / slide_h
+        if shape_h_norm <= 0.20 and ((0.12 <= norm_top < 0.38 and 14 <= max_font_size < 24) or ("Subtitle" in shape_name and norm_top < 0.45)):
             return SemanticRole.SUBTITLE
 
         # Rule 3C: Footer Detection
@@ -275,17 +276,29 @@ def inspect_shape(
 
 
 def inspect_slide(
-    path_or_prs: Union[str, Path, PresentationClass],
+    path_or_prs: Any,
     slide_number: int,
 ) -> SlideModel:
     """Inspect an individual 1-indexed slide and all of its shapes."""
-    prs, _ = _load_presentation(path_or_prs)
-    if slide_number < 1 or slide_number > len(prs.slides):
-        raise ValueError(f"Slide number {slide_number} is out of bounds (presentation has {len(prs.slides)} slides).")
+    if hasattr(path_or_prs, "shapes") and not hasattr(path_or_prs, "slides"):
+        slide = path_or_prs
+        slide_w_emu = 12192000
+        slide_h_emu = 6858000
+        try:
+            prs_part = slide.part.package.presentation_part
+            slide_w_emu = int(prs_part.presentation.slide_width)
+            slide_h_emu = int(prs_part.presentation.slide_height)
+        except Exception:
+            pass
+    else:
+        prs, _ = _load_presentation(path_or_prs)
+        if slide_number < 1 or slide_number > len(prs.slides):
+            raise ValueError(f"Slide number {slide_number} is out of bounds (presentation has {len(prs.slides)} slides).")
 
-    slide = prs.slides[slide_number - 1]
-    slide_w_emu = int(prs.slide_width)
-    slide_h_emu = int(prs.slide_height)
+        slide = prs.slides[slide_number - 1]
+        slide_w_emu = int(prs.slide_width)
+        slide_h_emu = int(prs.slide_height)
+
     slide_w_in = emu_to_inches(slide_w_emu)
     slide_h_in = emu_to_inches(slide_h_emu)
 

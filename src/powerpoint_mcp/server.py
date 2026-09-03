@@ -18,24 +18,33 @@ from powerpoint_mcp.tools.editing import (
     ppt_batch_modify_text,
     ppt_copy_shape,
     ppt_create_flow_diagram,
+    ppt_create_stepper,
+    ppt_create_structured_card_list,
     ppt_delete_shape,
     ppt_distribute_shapes,
     ppt_equalize_sizes,
     ppt_modify_ooxml,
     ppt_modify_shape,
     ppt_modify_text,
+    ppt_move_component,
     ppt_move_container,
     ppt_move_shape,
     ppt_reflow_container,
+    ppt_resize_component,
     ppt_resize_container,
     ppt_resize_shape,
     ppt_scale_slide_typography,
     ppt_space_shapes,
+    ppt_sync_component,
+    ppt_sync_layout,
+    ppt_sync_slide_chrome,
+    ppt_update_stepper,
 )
 from powerpoint_mcp.tools.inspection import (
     ppt_analyze_containers,
     ppt_analyze_slide_structure,
     ppt_compare_slides,
+    ppt_inspect_components,
     ppt_inspect_presentation,
     ppt_inspect_shape,
     ppt_inspect_slide,
@@ -46,6 +55,7 @@ from powerpoint_mcp.tools.inspection import (
 from powerpoint_mcp.tools.rendering import (
     ppt_render_presentation,
     ppt_render_slide,
+    ppt_render_slides,
     ppt_visual_diff,
 )
 from powerpoint_mcp.tools.versioning import (
@@ -357,31 +367,66 @@ def tool_inspect_shape(
 
 
 @app.tool(
+    name="ppt_inspect_components",
+    description=(
+        "Inspect high-level semantic visual components (headers, footers, steppers, cards, card lists, "
+        "content containers) on a slide without returning thousands of lines of raw shape data."
+    ),
+)
+def tool_inspect_components(
+    slide_number: int,
+    detail: str = "summary",
+    presentation_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Inspect slide components, bounding boxes, properties, and constituent shape IDs.
+
+    Args:
+        slide_number: 1-indexed slide number.
+        detail: 'summary' (default concise component overview) or 'full' (with child shape details).
+        presentation_path: Presentation path (defaults to active session).
+    """
+    return ppt_inspect_components(
+        slide_number=slide_number,
+        detail=detail,
+        presentation_path=presentation_path,
+    )
+
+
+@app.tool(
     name="ppt_compare_slides",
     description=(
-        "Compare geometric, typographic, and semantic layout properties between two slides, "
-        "matching corresponding shapes with multi-factor confidence scores."
+        "Compare geometric, typographic, and semantic layout properties between slides. "
+        "Supports comparing multiple target slides against a reference slide (v1.2) or two slides (v1.1)."
     ),
 )
 def tool_compare_slides(
-    slide_a: int,
-    slide_b: int,
+    slide_a: Optional[int] = None,
+    slide_b: Optional[int] = None,
+    reference_slide: Optional[int] = None,
+    target_slides: Optional[List[int]] = None,
+    aspects: Optional[List[str]] = None,
     match_shapes_flag: bool = True,
     render_diff: bool = False,
     presentation_path: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Compare layout and typography between two slides.
+    """Compare layout and typography between slides.
 
     Args:
-        slide_a: 1-indexed reference slide number.
-        slide_b: 1-indexed target slide number.
-        match_shapes_flag: Perform semantic shape matching (default True).
+        slide_a: Legacy 1-indexed reference slide number.
+        slide_b: Legacy 1-indexed target slide number.
+        reference_slide: 1-indexed reference slide number for multi-slide comparison.
+        target_slides: List of 1-indexed target slide numbers.
+        aspects: List of comparison aspects (['components', 'geometry', 'typography', 'colors', 'spacing']).
+        match_shapes_flag: Perform semantic shape matching (for 2-slide mode).
         render_diff: Perform image visual diffing if renderers available.
         presentation_path: Presentation path.
     """
     return ppt_compare_slides(
         slide_a=slide_a,
         slide_b=slide_b,
+        reference_slide=reference_slide,
+        target_slides=target_slides,
+        aspects=aspects,
         match_shapes_flag=match_shapes_flag,
         render_diff=render_diff,
         presentation_path=presentation_path,
@@ -1301,6 +1346,331 @@ def tool_modify_ooxml(
     )
 
 
+@app.tool(
+    name="ppt_create_stepper",
+    description=(
+        "Create a clean multi-step process stepper/breadcrumb component with active/inactive step styling "
+        "and connecting arrows without manual coordinate arithmetic."
+    ),
+)
+def tool_create_stepper(
+    slide_number: int,
+    steps: List[str],
+    active_step: Optional[str] = None,
+    start_x: Optional[float] = None,
+    start_y: Optional[float] = None,
+    total_width: Optional[float] = None,
+    node_height: Optional[float] = None,
+    shape_type: str = "rounded_rectangle",
+    active_fill: Optional[str] = None,
+    inactive_fill: Optional[str] = None,
+    active_text_color: Optional[str] = None,
+    inactive_text_color: Optional[str] = None,
+    connector_color: Optional[str] = None,
+    font_family: Optional[str] = None,
+    font_size_pt: Optional[float] = None,
+    presentation_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Create a stepper/breadcrumb component on a slide.
+
+    Args:
+        slide_number: 1-indexed slide number.
+        steps: List of step labels (e.g. ['ANALYZE', 'CONNECT', 'CONFIGURE', 'RUN']).
+        active_step: Currently active step label.
+        start_x: Origin X in inches.
+        start_y: Origin Y in inches.
+        total_width: Total span width in inches.
+        node_height: Height of each step node in inches.
+        shape_type: Node shape type ('rounded_rectangle', 'rectangle', 'chevron').
+        active_fill: Fill color hex for active step.
+        inactive_fill: Fill color hex for inactive steps.
+        active_text_color: Text color hex for active step.
+        inactive_text_color: Text color hex for inactive steps.
+        connector_color: Color hex for connecting arrows.
+        font_family: Font family name.
+        font_size_pt: Font size in points.
+        presentation_path: Presentation path (defaults to active session).
+    """
+    return ppt_create_stepper(
+        slide_number=slide_number,
+        steps=steps,
+        active_step=active_step,
+        start_x=start_x,
+        start_y=start_y,
+        total_width=total_width,
+        node_height=node_height,
+        shape_type=shape_type,
+        active_fill=active_fill,
+        inactive_fill=inactive_fill,
+        active_text_color=active_text_color,
+        inactive_text_color=inactive_text_color,
+        connector_color=connector_color,
+        font_family=font_family,
+        font_size_pt=font_size_pt,
+        presentation_path=presentation_path,
+    )
+
+
+@app.tool(
+    name="ppt_update_stepper",
+    description=(
+        "Update the active step highlight on an existing stepper component. Atomically cleans up "
+        "all old stepper shapes so no orphaned background rectangles or connectors remain."
+    ),
+)
+def tool_update_stepper(
+    slide_number: int,
+    active_step: str,
+    steps: Optional[List[str]] = None,
+    active_fill: Optional[str] = None,
+    inactive_fill: Optional[str] = None,
+    presentation_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Update active step highlighting on an existing stepper component.
+
+    Args:
+        slide_number: 1-indexed slide number.
+        active_step: Label of the step to activate (e.g. 'CONNECT').
+        steps: Optional override list of step labels.
+        active_fill: Optional active step fill color hex.
+        inactive_fill: Optional inactive step fill color hex.
+        presentation_path: Presentation path (defaults to active session).
+    """
+    return ppt_update_stepper(
+        slide_number=slide_number,
+        active_step=active_step,
+        steps=steps,
+        active_fill=active_fill,
+        inactive_fill=inactive_fill,
+        presentation_path=presentation_path,
+    )
+
+
+@app.tool(
+    name="ppt_sync_component",
+    description=(
+        "Synchronize a visual component (header, footer, stepper, content_area, card_list) from a source "
+        "slide to target slides, copying geometry, styling, and structure while preserving target content."
+    ),
+)
+def tool_sync_component(
+    source_slide: int,
+    source_component: str,
+    target_slides: List[int],
+    preserve_content: bool = True,
+    presentation_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Synchronize a visual component across slides.
+
+    Args:
+        source_slide: 1-indexed reference slide number.
+        source_component: Identifier or type of source component ('header', 'footer', 'stepper', 'card_list', 'content_area').
+        target_slides: List of 1-indexed target slide numbers.
+        preserve_content: Whether to preserve target slide-specific text (default True).
+        presentation_path: Presentation path (defaults to active session).
+    """
+    return ppt_sync_component(
+        source_slide=source_slide,
+        source_component=source_component,
+        target_slides=target_slides,
+        preserve_content=preserve_content,
+        presentation_path=presentation_path,
+    )
+
+
+@app.tool(
+    name="ppt_sync_slide_chrome",
+    description=(
+        "Synchronize shared slide chrome (headers, footers, steppers, margins, title treatments) "
+        "across slides from a reference slide while preserving slide-specific substantive body content."
+    ),
+)
+def tool_sync_slide_chrome(
+    reference_slide: int,
+    target_slides: List[int],
+    components: Optional[List[str]] = None,
+    presentation_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Synchronize shared slide chrome across target slides.
+
+    Args:
+        reference_slide: 1-indexed reference slide number.
+        target_slides: List of 1-indexed target slide numbers.
+        components: Optional list of components to synchronize (default: ['header', 'footer', 'stepper', 'title_treatment', 'margins']).
+        presentation_path: Presentation path (defaults to active session).
+    """
+    return ppt_sync_slide_chrome(
+        reference_slide=reference_slide,
+        target_slides=target_slides,
+        components=components,
+        presentation_path=presentation_path,
+    )
+
+
+@app.tool(
+    name="ppt_sync_layout",
+    description=(
+        "Synchronize content area / container layout from reference slide to target slides (position, "
+        "dimensions, internal spacing, typography, borders, fills) while preserving target text."
+    ),
+)
+def tool_sync_layout(
+    reference_slide: int,
+    target_slides: List[int],
+    component: str = "content_area",
+    preserve_content: bool = True,
+    presentation_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Synchronize layout structure across slides.
+
+    Args:
+        reference_slide: 1-indexed reference slide number.
+        target_slides: List of 1-indexed target slide numbers.
+        component: Target component to sync (default: 'content_area' or 'card_list').
+        preserve_content: Whether to preserve target text (default True).
+        presentation_path: Presentation path (defaults to active session).
+    """
+    return ppt_sync_layout(
+        reference_slide=reference_slide,
+        target_slides=target_slides,
+        component=component,
+        preserve_content=preserve_content,
+        presentation_path=presentation_path,
+    )
+
+
+@app.tool(
+    name="ppt_create_structured_card_list",
+    description=(
+        "Create a composite structured card container with organized item rows, descriptions, and "
+        "optional dividers matching standard design presets."
+    ),
+)
+def tool_create_structured_card_list(
+    slide_number: int,
+    container_bbox: Dict[str, float],
+    items: List[Dict[str, Any]],
+    divider: bool = True,
+    style_preset: str = "card_default",
+    container_fill: Optional[str] = None,
+    container_border: Optional[str] = None,
+    title_color: Optional[str] = None,
+    desc_color: Optional[str] = None,
+    presentation_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Create a structured card list with rows and dividers.
+
+    Args:
+        slide_number: 1-indexed slide number.
+        container_bbox: Dictionary with 'left', 'top', 'width', 'height' in inches.
+        items: List of item dictionaries with 'title' and optional 'description'.
+        divider: Whether to insert dividing lines between rows (default True).
+        style_preset: Preset style name ('card_default', 'card_accent').
+        container_fill: Override background fill hex color.
+        container_border: Override border stroke hex color.
+        title_color: Override item title font color hex.
+        desc_color: Override item description font color hex.
+        presentation_path: Presentation path (defaults to active session).
+    """
+    return ppt_create_structured_card_list(
+        slide_number=slide_number,
+        container_bbox=container_bbox,
+        items=items,
+        divider=divider,
+        style_preset=style_preset,
+        container_fill=container_fill,
+        container_border=container_border,
+        title_color=title_color,
+        desc_color=desc_color,
+        presentation_path=presentation_path,
+    )
+
+
+@app.tool(
+    name="ppt_move_component",
+    description=(
+        "Move a logical visual component (header, stepper, card_1, content_area) and all its "
+        "constituent shapes atomically preserving relative internal alignment and offsets."
+    ),
+)
+def tool_move_component(
+    slide_number: int,
+    component_id: str,
+    x: Optional[float] = None,
+    y: Optional[float] = None,
+    dx: Optional[float] = None,
+    dy: Optional[float] = None,
+    presentation_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Move component shapes atomically.
+
+    Args:
+        slide_number: 1-indexed slide number.
+        component_id: Identifier or type of target component ('header', 'stepper', 'card_1', 'content_area').
+        x: Absolute destination X coordinate in inches for component top-left.
+        y: Absolute destination Y coordinate in inches for component top-left.
+        dx: Relative delta shift X in inches.
+        dy: Relative delta shift Y in inches.
+        presentation_path: Presentation path (defaults to active session).
+    """
+    return ppt_move_component(
+        slide_number=slide_number,
+        component_id=component_id,
+        x=x,
+        y=y,
+        dx=dx,
+        dy=dy,
+        presentation_path=presentation_path,
+    )
+
+
+@app.tool(
+    name="ppt_resize_component",
+    description=(
+        "Resize a logical visual component (content_area, card_1, card_list) and proportionally "
+        "adjust/reflow all its constituent shapes atomically."
+    ),
+)
+def tool_resize_component(
+    slide_number: int,
+    component_id: str,
+    width: Optional[float] = None,
+    height: Optional[float] = None,
+    dwidth: Optional[float] = None,
+    dheight: Optional[float] = None,
+    scale_width: Optional[float] = None,
+    scale_height: Optional[float] = None,
+    reflow_children: bool = True,
+    presentation_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Resize component and constituent shapes atomically.
+
+    Args:
+        slide_number: 1-indexed slide number.
+        component_id: Identifier or type of target component ('content_area', 'card_1', 'card_list').
+        width: Absolute target width in inches.
+        height: Absolute target height in inches.
+        dwidth: Relative delta width in inches.
+        dheight: Relative delta height in inches.
+        scale_width: Width scale multiplier (e.g. 1.15).
+        scale_height: Height scale multiplier (e.g. 1.10).
+        reflow_children: Whether to proportionally adjust child shape positions and sizes (default True).
+        presentation_path: Presentation path (defaults to active session).
+    """
+    return ppt_resize_component(
+        slide_number=slide_number,
+        component_id=component_id,
+        width=width,
+        height=height,
+        dwidth=dwidth,
+        dheight=dheight,
+        scale_width=scale_width,
+        scale_height=scale_height,
+        reflow_children=reflow_children,
+        presentation_path=presentation_path,
+    )
+
+
 # =============================================================================
 # 4. Rendering & Visual Verification Tools
 # =============================================================================
@@ -1333,6 +1703,37 @@ def tool_render_slide(
         slide_number=slide_number,
         output_dir=output_dir,
         output_path=output_path,
+        renderer=renderer,
+        dpi=dpi,
+        presentation_path=presentation_path,
+    )
+
+
+@app.tool(
+    name="ppt_render_slides",
+    description=(
+        "Render a specified batch of slides (e.g. [3, 4, 5, 6]) to high-resolution PNGs in one call."
+    ),
+)
+def tool_render_slides(
+    slide_numbers: List[int],
+    output_dir: Optional[str] = None,
+    renderer: str = "auto",
+    dpi: int = 150,
+    presentation_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Render a specified list of slides in batch to PNG.
+
+    Args:
+        slide_numbers: List of 1-indexed slide numbers to render.
+        output_dir: Output directory path.
+        renderer: Preferred renderer engine ('auto', 'powerpoint', 'libreoffice', 'mock').
+        dpi: Render resolution DPI (default 150).
+        presentation_path: Presentation path.
+    """
+    return ppt_render_slides(
+        slide_numbers=slide_numbers,
+        output_dir=output_dir,
         renderer=renderer,
         dpi=dpi,
         presentation_path=presentation_path,

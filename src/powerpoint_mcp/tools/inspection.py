@@ -11,6 +11,8 @@ from pptx import Presentation
 from powerpoint_mcp.models.shape import ShapeModel, emu_to_inches
 from powerpoint_mcp.models.slide import SlideModel
 from powerpoint_mcp.models.presentation import PresentationModel
+from powerpoint_mcp.pptx.components import inspect_components
+from powerpoint_mcp.pptx.cross_slide import compare_cross_slides
 from powerpoint_mcp.pptx.inspector import (
     inspect_presentation,
     inspect_shape,
@@ -374,31 +376,86 @@ def ppt_inspect_shape(
 
 
 @handle_tool_errors
+def ppt_inspect_components(
+    slide_number: int,
+    detail: str = "summary",
+    presentation_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Inspect semantic visual components (headers, footers, steppers, cards, content containers) on a slide.
+
+    Args:
+        slide_number: 1-indexed slide number.
+        detail: 'summary' (default concise component overview) or 'full' (with child shape details).
+        presentation_path: Path to presentation. If omitted, uses active session.
+
+    Returns:
+        Structured dictionary detailing detected components, bounding boxes, properties, and constituent shape IDs.
+    """
+    if slide_number < 1:
+        raise IndexError(f"Slide number must be >= 1, got {slide_number}")
+
+    target_path = _resolve_presentation_path(presentation_path)
+    return inspect_components(target_path, slide_number, detail=detail)
+
+
+@handle_tool_errors
 def ppt_compare_slides(
-    slide_a: int,
-    slide_b: int,
+    slide_a: Optional[int] = None,
+    slide_b: Optional[int] = None,
+    reference_slide: Optional[int] = None,
+    target_slides: Optional[List[int]] = None,
+    aspects: Optional[List[str]] = None,
     match_shapes_flag: bool = True,
     render_diff: bool = False,
     presentation_path: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Compare geometric, typographic, and semantic layout properties between two slides.
+    """Compare geometric, typographic, and semantic layout properties between slides.
+
+    Supports both cross-slide multi-target comparison against a reference slide (v1.2)
+    and legacy two-slide comparison (v1.1).
 
     Args:
-        slide_a: 1-indexed reference slide number.
-        slide_b: 1-indexed comparison slide number.
-        match_shapes_flag: Whether to perform multi-factor semantic shape matching.
+        slide_a: Legacy 1-indexed reference slide number.
+        slide_b: Legacy 1-indexed comparison slide number.
+        reference_slide: 1-indexed reference slide number for multi-slide comparison.
+        target_slides: List of 1-indexed target slide numbers to compare against reference slide.
+        aspects: List of comparison aspects (['components', 'geometry', 'typography', 'colors', 'spacing']).
+        match_shapes_flag: Whether to perform multi-factor semantic shape matching (for 2-slide mode).
         render_diff: Whether to perform pixel visual diffing if renderers are available.
         presentation_path: Path to presentation. If omitted, uses active session.
 
     Returns:
-        Slide comparison report detailing matched shapes, layout differences, and similarity score.
+        Slide comparison report detailing matched shapes/components, layout differences, and summary text.
     """
-    if slide_a < 1 or slide_b < 1:
-        raise IndexError(f"Slide numbers must be >= 1, got slide_a={slide_a}, slide_b={slide_b}")
-
     target_path = _resolve_presentation_path(presentation_path)
-    slide_a_model = inspect_slide(target_path, slide_a)
-    slide_b_model = inspect_slide(target_path, slide_b)
+
+    # Cross-slide mode: if reference_slide and target_slides provided, or target_slides provided
+    if reference_slide is not None and target_slides is not None:
+        if reference_slide < 1:
+            raise IndexError(f"Reference slide number must be >= 1, got {reference_slide}")
+        for t in target_slides:
+            if t < 1:
+                raise IndexError(f"Target slide number must be >= 1, got {t}")
+        return compare_cross_slides(target_path, reference_slide, target_slides, aspects=aspects)
+
+    # If slide_a is provided and target_slides is provided
+    if slide_a is not None and target_slides is not None:
+        if slide_a < 1:
+            raise IndexError(f"Reference slide number must be >= 1, got {slide_a}")
+        return compare_cross_slides(target_path, slide_a, target_slides, aspects=aspects)
+
+    # Legacy two-slide mode
+    ref_s = reference_slide if reference_slide is not None else slide_a
+    tgt_s = slide_b
+
+    if ref_s is None or tgt_s is None:
+        raise ValueError("Either specify (reference_slide, target_slides) or (slide_a, slide_b)")
+
+    if ref_s < 1 or tgt_s < 1:
+        raise IndexError(f"Slide numbers must be >= 1, got ref_s={ref_s}, tgt_s={tgt_s}")
+
+    slide_a_model = inspect_slide(target_path, ref_s)
+    slide_b_model = inspect_slide(target_path, tgt_s)
 
     comp_result = compare_slides(slide_a_model, slide_b_model)
     res_dict = comp_result.to_dict()

@@ -11,6 +11,7 @@ import uuid
 
 from pptx import Presentation
 
+from powerpoint_mcp.rendering.com_lifecycle import defensive_file_operation
 from powerpoint_mcp.utils.logging import get_logger
 from powerpoint_mcp.utils.paths import (
     DEFAULT_WORKING_FILENAME,
@@ -141,8 +142,8 @@ class SessionManager:
         original_path = dirs["original_path"]
 
         # Copy source presentation to original.pptx and working.pptx
-        shutil.copy2(src_path, original_path)
-        shutil.copy2(src_path, working_path)
+        defensive_file_operation(lambda: shutil.copy2(src_path, original_path), original_path, action_name="open_copy_original")
+        defensive_file_operation(lambda: shutil.copy2(src_path, working_path), working_path, action_name="open_copy_working")
 
         src_hash = compute_file_hash(src_path)
         working_hash = compute_file_hash(working_path)
@@ -285,7 +286,7 @@ class SessionManager:
                 ts = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
                 backup_path = backups_dir / f"{source_stem}.backup-{ts}.pptx"
 
-            shutil.copy2(working_file, backup_path)
+            defensive_file_operation(lambda: shutil.copy2(working_file, backup_path), backup_path, action_name="create_backup")
 
             now_str = _iso_now()
             backup_record = {
@@ -314,7 +315,7 @@ class SessionManager:
             ts = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
             backup_path = parent_dir / f"{target_path.stem}.backup-{ts}.pptx"
 
-        shutil.copy2(target_path, backup_path)
+        defensive_file_operation(lambda: shutil.copy2(target_path, backup_path), backup_path, action_name="create_standalone_backup")
         logger.info(f"Created standalone file backup at {backup_path}")
         return str(backup_path)
 
@@ -345,13 +346,13 @@ class SessionManager:
         if target_str == "original" or not target_str:
             if not original_file.exists():
                 raise FileNotFoundError(f"Original presentation snapshot not found at {original_file}")
-            shutil.copy2(original_file, working_file)
+            defensive_file_operation(lambda: shutil.copy2(original_file, working_file), working_file, action_name="revert_original")
             reverted_from = "original"
         else:
             # Check if target_str is a direct file path
             candidate_path = Path(target_str)
             if candidate_path.is_file() and candidate_path.exists():
-                shutil.copy2(candidate_path, working_file)
+                defensive_file_operation(lambda: shutil.copy2(candidate_path, working_file), working_file, action_name="revert_custom_path")
                 reverted_from = str(candidate_path)
             else:
                 # Search within session backups directory or backup records
@@ -372,7 +373,7 @@ class SessionManager:
                 if found is None or not found.exists():
                     raise FileNotFoundError(f"Backup snapshot matching '{target_str}' not found in session backups")
 
-                shutil.copy2(found, working_file)
+                defensive_file_operation(lambda: shutil.copy2(found, working_file), working_file, action_name="revert_backup")
                 reverted_from = str(found)
 
         now_str = _iso_now()
@@ -437,7 +438,7 @@ class SessionManager:
                 details={"saved_to": str(target_path)},
             )
 
-        shutil.copy2(working_file, target_path)
+        defensive_file_operation(lambda: shutil.copy2(working_file, target_path), target_path, action_name="save_session")
 
         # Integrity Check 2: Verify target file was successfully saved
         try:
@@ -516,7 +517,7 @@ class SessionManager:
                 details={"target": str(out_path)},
             )
 
-        shutil.copy2(working_file, out_path)
+        defensive_file_operation(lambda: shutil.copy2(working_file, out_path), out_path, action_name="save_as")
 
         # Integrity Check: verify written output file
         try:

@@ -215,6 +215,75 @@ def ppt_render_slide(
 
 
 @handle_tool_errors
+def ppt_render_slides(
+    slide_numbers: List[int],
+    output_dir: Optional[str] = None,
+    renderer: str = "auto",
+    dpi: int = 150,
+    presentation_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Render a specified list of slides in batch to PNG images.
+
+    Args:
+        slide_numbers: List of 1-indexed slide numbers to render (e.g. [3, 4, 5, 6]).
+        output_dir: Target output directory for PNG slide renders.
+        renderer: Renderer preference ('auto', 'powerpoint', 'libreoffice', 'mock').
+        dpi: Output resolution DPI (default 150).
+        presentation_path: Path to presentation. If omitted, uses active session.
+
+    Returns:
+        Structured dictionary listing rendered slide numbers, paths, and images map.
+    """
+    if not slide_numbers:
+        raise ValueError("slide_numbers must contain at least one slide number")
+
+    target_path = _resolve_presentation_path(presentation_path)
+    mgr = get_session_manager()
+    session = mgr.get_current_session()
+
+    if output_dir:
+        out_dir_path = Path(output_dir).resolve()
+    elif session:
+        out_dir_path = get_session_renders_dir(session.session_id, mgr.workspace_dir.parent)
+    else:
+        out_dir_path = Path("./renders").resolve()
+
+    out_dir_path.mkdir(parents=True, exist_ok=True)
+
+    rendered_slides: List[Dict[str, Any]] = []
+    images_map: Dict[int, str] = {}
+    renderer_name = "powerpoint_com"
+
+    for s_num in slide_numbers:
+        if s_num < 1:
+            raise IndexError(f"Slide number must be >= 1, got {s_num}")
+        res = ppt_render_slide(
+            slide_number=s_num,
+            output_dir=str(out_dir_path),
+            renderer=renderer,
+            dpi=dpi,
+            presentation_path=target_path,
+        )
+        if res.get("success"):
+            img_path = res.get("image_path")
+            rendered_slides.append({
+                "slide_number": s_num,
+                "image_path": img_path,
+            })
+            images_map[s_num] = img_path
+            renderer_name = res.get("renderer", renderer_name)
+
+    return {
+        "success": True,
+        "slide_count": len(rendered_slides),
+        "slide_numbers": slide_numbers,
+        "rendered_slides": rendered_slides,
+        "images": images_map,
+        "renderer": renderer_name,
+    }
+
+
+@handle_tool_errors
 def ppt_render_presentation(
     output_dir: Optional[str] = None,
     renderer: str = "auto",

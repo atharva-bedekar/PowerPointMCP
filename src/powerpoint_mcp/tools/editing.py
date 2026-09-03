@@ -17,7 +17,11 @@ from powerpoint_mcp.models.shape import (
     emu_to_inches,
     inches_to_emu,
 )
+from powerpoint_mcp.pptx.cards import create_structured_card_list
+from powerpoint_mcp.pptx.component_ops import move_component, resize_component
 from powerpoint_mcp.pptx.diagrams import create_flow_diagram
+from powerpoint_mcp.pptx.stepper import create_stepper, update_stepper
+from powerpoint_mcp.pptx.sync import sync_component, sync_layout, sync_slide_chrome
 from powerpoint_mcp.pptx.editor import (
     copy_shape,
     delete_shape,
@@ -51,6 +55,7 @@ from powerpoint_mcp.pptx.styles import (
     apply_style_to_shape,
     extract_complete_shape_style,
 )
+from powerpoint_mcp.rendering.com_lifecycle import defensive_file_operation
 from powerpoint_mcp.tools.inspection import handle_tool_errors
 from powerpoint_mcp.tools.versioning import get_session_manager, resolve_active_target
 
@@ -71,6 +76,11 @@ def _get_target_presentation(
     )
     prs = Presentation(target_path_str)
     return target_path_str, prs, session
+
+
+def _save_presentation(prs: Any, target_path: str, operation: str = "edit") -> None:
+    """Save presentation with defensive retry behavior against Windows COM file locks."""
+    defensive_file_operation(lambda: prs.save(target_path), target_path, action_name=operation)
 
 
 
@@ -153,7 +163,7 @@ def ppt_modify_shape(
         if distribute:
             distribute_shapes(selected_shapes, distribute)
 
-        prs.save(target_path)
+        _save_presentation(prs, target_path)
         if session:
             session.save_metadata()
 
@@ -183,7 +193,7 @@ def ppt_modify_shape(
         drotation=drotation,
     )
 
-    prs.save(target_path)
+    _save_presentation(prs, target_path)
     if session:
         session.save_metadata()
 
@@ -289,7 +299,7 @@ def ppt_modify_text(
         margins=margins,
     )
 
-    prs.save(target_path)
+    _save_presentation(prs, target_path)
     if session:
         session.save_metadata()
 
@@ -347,7 +357,7 @@ def ppt_copy_shape(
         offset_y_inches=y_offset,
     )
 
-    prs.save(target_path)
+    _save_presentation(prs, target_path)
     if session:
         session.save_metadata()
 
@@ -391,7 +401,7 @@ def ppt_move_shape(
     slide = prs.slides[slide_number - 1]
     res = move_shape(slide, shape_id, dx=dx, dy=dy, x=x, y=y)
 
-    prs.save(target_path)
+    _save_presentation(prs, target_path)
     if session:
         session.save_metadata()
 
@@ -452,7 +462,7 @@ def ppt_resize_shape(
     slide = prs.slides[slide_number - 1]
     res = resize_shape(slide, shape_id, width=width, height=height, scale_x=eff_scale_x, scale_y=eff_scale_y)
 
-    prs.save(target_path)
+    _save_presentation(prs, target_path)
     if session:
         session.save_metadata()
 
@@ -491,7 +501,7 @@ def ppt_delete_shape(
     if not deleted:
         raise ValueError(f"Failed to delete shape {shape_id}")
 
-    prs.save(target_path)
+    _save_presentation(prs, target_path)
     if session:
         session.save_metadata()
 
@@ -617,7 +627,7 @@ def ppt_modify_ooxml(
 
         safe_modify_xml(target_obj, mutate_fn)
 
-    prs.save(target_path)
+    _save_presentation(prs, target_path)
     if session:
         session.save_metadata()
 
@@ -721,7 +731,7 @@ def ppt_batch_modify_text(
             "font_family": res.get("font_name"),
         })
 
-    prs.save(target_path)
+    _save_presentation(prs, target_path)
     if session:
         session.save_metadata()
 
@@ -786,7 +796,7 @@ def ppt_scale_slide_typography(
         exclude_shape_ids=exclude_shape_ids,
     )
 
-    prs.save(target_path)
+    _save_presentation(prs, target_path)
     if session:
         session.save_metadata()
 
@@ -880,7 +890,7 @@ def ppt_batch_modify_shapes(
             "rotation": res["rotation"],
         })
 
-    prs.save(target_path)
+    _save_presentation(prs, target_path)
     if session:
         session.save_metadata()
 
@@ -938,7 +948,7 @@ def ppt_align_shapes(
 
     align_shapes(selected, alignment=alignment, reference_shape=ref_shape)
 
-    prs.save(target_path)
+    _save_presentation(prs, target_path)
     if session:
         session.save_metadata()
 
@@ -1003,7 +1013,7 @@ def ppt_distribute_shapes(
 
     distributed = distribute_shapes(selected, mode=direction, spacing=spacing_mode)
 
-    prs.save(target_path)
+    _save_presentation(prs, target_path)
     if session:
         session.save_metadata()
 
@@ -1069,7 +1079,7 @@ def ppt_space_shapes(
 
     spaced = space_shapes(selected, gap_inches=gap_inches, direction=direction)
 
-    prs.save(target_path)
+    _save_presentation(prs, target_path)
     if session:
         session.save_metadata()
 
@@ -1148,7 +1158,7 @@ def ppt_equalize_sizes(
         mode=mode,
     )
 
-    prs.save(target_path)
+    _save_presentation(prs, target_path)
     if session:
         session.save_metadata()
 
@@ -1209,7 +1219,7 @@ def ppt_move_container(
     slide = prs.slides[slide_number - 1]
     res = move_container(slide, container_id=container_id, x=x, y=y, dx=dx, dy=dy)
 
-    prs.save(target_path)
+    _save_presentation(prs, target_path)
     if session:
         session.save_metadata()
 
@@ -1272,7 +1282,7 @@ def ppt_resize_container(
         reflow_children=reflow_children,
     )
 
-    prs.save(target_path)
+    _save_presentation(prs, target_path)
     if session:
         session.save_metadata()
 
@@ -1320,7 +1330,7 @@ def ppt_reflow_container(
         item_spacing_inches=item_spacing_inches,
     )
 
-    prs.save(target_path)
+    _save_presentation(prs, target_path)
     if session:
         session.save_metadata()
 
@@ -1435,7 +1445,7 @@ def ppt_apply_style(
         )
         results.append(res)
 
-    prs.save(target_path)
+    _save_presentation(prs, target_path)
     if session:
         session.save_metadata()
 
@@ -1514,7 +1524,7 @@ def ppt_create_flow_diagram(
         connector_color=connector_color,
     )
 
-    prs.save(target_path)
+    _save_presentation(prs, target_path)
     if session:
         session.save_metadata()
 
@@ -1525,4 +1535,465 @@ def ppt_create_flow_diagram(
         "target": "working" if session else "standalone",
         **res,
     }
+
+
+# =============================================================================
+# v1.2 Semantic Component Tools
+# =============================================================================
+
+@handle_tool_errors
+def ppt_create_stepper(
+    slide_number: int,
+    steps: List[str],
+    active_step: Optional[str] = None,
+    start_x: Optional[float] = None,
+    start_y: Optional[float] = None,
+    total_width: Optional[float] = None,
+    node_height: Optional[float] = None,
+    shape_type: str = "rounded_rectangle",
+    active_fill: Optional[str] = None,
+    inactive_fill: Optional[str] = None,
+    active_text_color: Optional[str] = None,
+    inactive_text_color: Optional[str] = None,
+    connector_color: Optional[str] = None,
+    font_family: Optional[str] = None,
+    font_size_pt: Optional[float] = None,
+    presentation_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Create a high-fidelity stepper/breadcrumb component with active/inactive step styling and connecting arrows.
+
+    Args:
+        slide_number: 1-indexed slide number.
+        steps: List of step label strings (e.g. ['ANALYZE', 'CONNECT', 'CONFIGURE', 'RUN']).
+        active_step: Label of the currently active step.
+        start_x: X coordinate origin in inches.
+        start_y: Y coordinate origin in inches.
+        total_width: Total span width in inches.
+        node_height: Height of each step node in inches.
+        shape_type: Shape type ('rounded_rectangle', 'rectangle', 'chevron').
+        active_fill: Fill hex color for active step.
+        inactive_fill: Fill hex color for inactive steps.
+        active_text_color: Text hex color for active step.
+        inactive_text_color: Text hex color for inactive steps.
+        connector_color: Hex color for connecting arrows.
+        font_family: Font family name.
+        font_size_pt: Font size in points.
+        presentation_path: Path to presentation. If omitted, uses active session.
+
+    Returns:
+        Structured dictionary confirming created stepper shape IDs and coordinates.
+    """
+    target_path, prs, session = _get_target_presentation(
+        presentation_path=presentation_path, operation="create_stepper"
+    )
+
+    if slide_number < 1 or slide_number > len(prs.slides):
+        raise IndexError(f"Slide number {slide_number} is out of range (1..{len(prs.slides)})")
+
+    slide = prs.slides[slide_number - 1]
+    res = create_stepper(
+        slide_or_prs=slide,
+        steps=steps,
+        slide_number=slide_number,
+        active_step=active_step,
+        start_x=start_x,
+        start_y=start_y,
+        total_width=total_width,
+        node_height=node_height,
+        shape_type=shape_type,
+        active_fill=active_fill,
+        inactive_fill=inactive_fill,
+        active_text_color=active_text_color,
+        inactive_text_color=inactive_text_color,
+        connector_color=connector_color,
+        font_family=font_family,
+        font_size_pt=font_size_pt,
+    )
+
+    _save_presentation(prs, target_path)
+    if session:
+        session.save_metadata()
+
+    return {
+        "success": True,
+        "slide_number": slide_number,
+        "session_id": session.session_id if session else None,
+        "target": "working" if session else "standalone",
+        **res,
+    }
+
+
+@handle_tool_errors
+def ppt_update_stepper(
+    slide_number: int,
+    active_step: str,
+    steps: Optional[List[str]] = None,
+    active_fill: Optional[str] = None,
+    inactive_fill: Optional[str] = None,
+    presentation_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Update active step highlighting on an existing stepper component.
+
+    Completely replaces old stepper shapes cleanly without leaving any orphaned background shapes or arrows.
+
+    Args:
+        slide_number: 1-indexed slide number.
+        active_step: Label of the step to activate (e.g. 'CONNECT').
+        steps: Optional override list of step labels.
+        active_fill: Optional active step fill color hex.
+        inactive_fill: Optional inactive step fill color hex.
+        presentation_path: Path to presentation. If omitted, uses active session.
+
+    Returns:
+        Structured dictionary confirming updated active step and shape IDs.
+    """
+    target_path, prs, session = _get_target_presentation(
+        presentation_path=presentation_path, operation="update_stepper"
+    )
+
+    if slide_number < 1 or slide_number > len(prs.slides):
+        raise IndexError(f"Slide number {slide_number} is out of range (1..{len(prs.slides)})")
+
+    slide = prs.slides[slide_number - 1]
+    res = update_stepper(
+        slide_or_prs=slide,
+        active_step=active_step,
+        slide_number=slide_number,
+        steps=steps,
+        active_fill=active_fill,
+        inactive_fill=inactive_fill,
+    )
+
+    _save_presentation(prs, target_path)
+    if session:
+        session.save_metadata()
+
+    return {
+        "success": True,
+        "slide_number": slide_number,
+        "session_id": session.session_id if session else None,
+        "target": "working" if session else "standalone",
+        **res,
+    }
+
+
+@handle_tool_errors
+def ppt_sync_component(
+    source_slide: int,
+    source_component: str,
+    target_slides: List[int],
+    preserve_content: bool = True,
+    presentation_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Synchronize a visual component from a reference slide to multiple target slides.
+
+    Copies geometry, styling (fonts, colors, borders, spacing), and structure from source component
+    while strictly preserving target-specific content when preserve_content is True.
+
+    Args:
+        source_slide: 1-indexed reference slide number.
+        source_component: Component type or identifier ('header', 'footer', 'stepper', 'card_list', 'content_area').
+        target_slides: List of 1-indexed target slide numbers.
+        preserve_content: Whether to preserve target-specific text (default True).
+        presentation_path: Path to presentation. If omitted, uses active session.
+
+    Returns:
+        Structured dictionary detailing synchronized target slides.
+    """
+    target_path, prs, session = _get_target_presentation(
+        presentation_path=presentation_path, operation="sync_component"
+    )
+
+    res = sync_component(
+        presentation_or_path=prs,
+        source_slide=source_slide,
+        source_component=source_component,
+        target_slides=target_slides,
+        preserve_content=preserve_content,
+    )
+
+    _save_presentation(prs, target_path)
+    if session:
+        session.save_metadata()
+
+    return {
+        "success": True,
+        "session_id": session.session_id if session else None,
+        "target": "working" if session else "standalone",
+        **res,
+    }
+
+
+@handle_tool_errors
+def ppt_sync_slide_chrome(
+    reference_slide: int,
+    target_slides: List[int],
+    components: Optional[List[str]] = None,
+    presentation_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Synchronize shared slide chrome (headers, footers, steppers, margins) across slides.
+
+    Synchronizes only the shared visual shell without replacing substantive slide content.
+
+    Args:
+        reference_slide: 1-indexed reference slide number.
+        target_slides: List of 1-indexed target slide numbers to harmonize.
+        components: Optional list of components to synchronize (default: ['header', 'footer', 'stepper', 'title_treatment', 'margins']).
+        presentation_path: Path to presentation. If omitted, uses active session.
+
+    Returns:
+        Structured dictionary confirming chrome synchronization across target slides.
+    """
+    target_path, prs, session = _get_target_presentation(
+        presentation_path=presentation_path, operation="sync_slide_chrome"
+    )
+
+    res = sync_slide_chrome(
+        presentation_or_path=prs,
+        reference_slide=reference_slide,
+        target_slides=target_slides,
+        components=components,
+    )
+
+    _save_presentation(prs, target_path)
+    if session:
+        session.save_metadata()
+
+    return {
+        "success": True,
+        "session_id": session.session_id if session else None,
+        "target": "working" if session else "standalone",
+        **res,
+    }
+
+
+@handle_tool_errors
+def ppt_sync_layout(
+    reference_slide: int,
+    target_slides: List[int],
+    component: str = "content_area",
+    preserve_content: bool = True,
+    presentation_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Synchronize content area / container layout from reference slide to target slides.
+
+    Synchronizes position, dimensions, internal spacing, typography, borders, and fills
+    while preserving target-specific content.
+
+    Args:
+        reference_slide: 1-indexed reference slide number.
+        target_slides: List of 1-indexed target slide numbers.
+        component: Target component to sync (default: 'content_area' or 'card_list').
+        preserve_content: Whether to preserve target text (default True).
+        presentation_path: Path to presentation. If omitted, uses active session.
+
+    Returns:
+        Structured dictionary confirming layout synchronization.
+    """
+    target_path, prs, session = _get_target_presentation(
+        presentation_path=presentation_path, operation="sync_layout"
+    )
+
+    res = sync_layout(
+        presentation_or_path=prs,
+        reference_slide=reference_slide,
+        target_slides=target_slides,
+        component=component,
+        preserve_content=preserve_content,
+    )
+
+    _save_presentation(prs, target_path)
+    if session:
+        session.save_metadata()
+
+    return {
+        "success": True,
+        "session_id": session.session_id if session else None,
+        "target": "working" if session else "standalone",
+        **res,
+    }
+
+
+@handle_tool_errors
+def ppt_create_structured_card_list(
+    slide_number: int,
+    container_bbox: Dict[str, float],
+    items: List[Dict[str, Any]],
+    divider: bool = True,
+    style_preset: str = "card_default",
+    container_fill: Optional[str] = None,
+    container_border: Optional[str] = None,
+    title_color: Optional[str] = None,
+    desc_color: Optional[str] = None,
+    presentation_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Create a structured container card with organized item rows and optional horizontal dividers.
+
+    Args:
+        slide_number: 1-indexed slide number.
+        container_bbox: Dictionary with 'left', 'top', 'width', 'height' in inches.
+        items: List of item dictionaries with 'title' and optional 'description' or 'body'.
+        divider: Whether to insert subtle dividing lines between item rows (default True).
+        style_preset: Preset style name ('card_default', 'card_accent', etc.).
+        container_fill: Override background fill hex color.
+        container_border: Override border stroke hex color.
+        title_color: Override item title font color hex.
+        desc_color: Override item description font color hex.
+        presentation_path: Path to presentation. If omitted, uses active session.
+
+    Returns:
+        Structured dictionary containing created container, row textboxes, and divider shape IDs.
+    """
+    target_path, prs, session = _get_target_presentation(
+        presentation_path=presentation_path, operation="create_structured_card_list"
+    )
+
+    if slide_number < 1 or slide_number > len(prs.slides):
+        raise IndexError(f"Slide number {slide_number} is out of range (1..{len(prs.slides)})")
+
+    slide = prs.slides[slide_number - 1]
+    res = create_structured_card_list(
+        slide_or_prs=slide,
+        container_bbox=container_bbox,
+        items=items,
+        slide_number=slide_number,
+        divider=divider,
+        style_preset=style_preset,
+        container_fill=container_fill,
+        container_border=container_border,
+        title_color=title_color,
+        desc_color=desc_color,
+    )
+
+    _save_presentation(prs, target_path)
+    if session:
+        session.save_metadata()
+
+    return {
+        "success": True,
+        "slide_number": slide_number,
+        "session_id": session.session_id if session else None,
+        "target": "working" if session else "standalone",
+        **res,
+    }
+
+
+@handle_tool_errors
+def ppt_move_component(
+    slide_number: int,
+    component_id: str,
+    x: Optional[float] = None,
+    y: Optional[float] = None,
+    dx: Optional[float] = None,
+    dy: Optional[float] = None,
+    presentation_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Move all constituent shapes of a component atomically preserving internal relative offsets.
+
+    Args:
+        slide_number: 1-indexed slide number.
+        component_id: Identifier or type of target component ('header', 'stepper', 'card_1', 'content_area').
+        x: Absolute destination X coordinate in inches for component top-left.
+        y: Absolute destination Y coordinate in inches for component top-left.
+        dx: Relative delta shift X in inches.
+        dy: Relative delta shift Y in inches.
+        presentation_path: Path to presentation. If omitted, uses active session.
+
+    Returns:
+        Structured dictionary confirming modified component ID, shape IDs, and updated bounding box.
+    """
+    target_path, prs, session = _get_target_presentation(
+        presentation_path=presentation_path, operation="move_component"
+    )
+
+    if slide_number < 1 or slide_number > len(prs.slides):
+        raise IndexError(f"Slide number {slide_number} is out of range (1..{len(prs.slides)})")
+
+    slide = prs.slides[slide_number - 1]
+    res = move_component(
+        slide_or_prs=slide,
+        component_id=component_id,
+        slide_number=slide_number,
+        x=x,
+        y=y,
+        dx=dx,
+        dy=dy,
+    )
+
+    _save_presentation(prs, target_path)
+    if session:
+        session.save_metadata()
+
+    return {
+        "success": True,
+        "slide_number": slide_number,
+        "session_id": session.session_id if session else None,
+        "target": "working" if session else "standalone",
+        **res,
+    }
+
+
+@handle_tool_errors
+def ppt_resize_component(
+    slide_number: int,
+    component_id: str,
+    width: Optional[float] = None,
+    height: Optional[float] = None,
+    dwidth: Optional[float] = None,
+    dheight: Optional[float] = None,
+    scale_width: Optional[float] = None,
+    scale_height: Optional[float] = None,
+    reflow_children: bool = True,
+    presentation_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Resize a component and proportionally adjust/reflow all its constituent shapes atomically.
+
+    Args:
+        slide_number: 1-indexed slide number.
+        component_id: Identifier or type of target component ('content_area', 'card_1', 'card_list').
+        width: Absolute target width in inches.
+        height: Absolute target height in inches.
+        dwidth: Relative delta width in inches.
+        dheight: Relative delta height in inches.
+        scale_width: Width scale multiplier (e.g. 1.15).
+        scale_height: Height scale multiplier (e.g. 1.10).
+        reflow_children: Whether to proportionally adjust child shape positions and sizes (default True).
+        presentation_path: Path to presentation. If omitted, uses active session.
+
+    Returns:
+        Structured dictionary confirming modified shape IDs and updated bounding box.
+    """
+    target_path, prs, session = _get_target_presentation(
+        presentation_path=presentation_path, operation="resize_component"
+    )
+
+    if slide_number < 1 or slide_number > len(prs.slides):
+        raise IndexError(f"Slide number {slide_number} is out of range (1..{len(prs.slides)})")
+
+    slide = prs.slides[slide_number - 1]
+    res = resize_component(
+        slide_or_prs=slide,
+        component_id=component_id,
+        slide_number=slide_number,
+        width=width,
+        height=height,
+        dwidth=dwidth,
+        dheight=dheight,
+        scale_width=scale_width,
+        scale_height=scale_height,
+        reflow_children=reflow_children,
+    )
+
+    _save_presentation(prs, target_path)
+    if session:
+        session.save_metadata()
+
+    return {
+        "success": True,
+        "slide_number": slide_number,
+        "session_id": session.session_id if session else None,
+        "target": "working" if session else "standalone",
+        **res,
+    }
+
 

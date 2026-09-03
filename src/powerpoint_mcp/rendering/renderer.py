@@ -79,63 +79,103 @@ class BaseRenderer(ABC):
         ...
 
 
+def _render_slide_inner(
+    ppt_app: Any, prs_path: Path, slide_number: int, out_path: Path, width: int, height: int
+) -> None:
+    import pythoncom
+
+    presentations = ppt_app.Presentations
+    # Open(FileName, ReadOnly=-1, Untitled=0, WithWindow=0)
+    presentation = presentations.Open(str(prs_path), -1, 0, 0)
+    try:
+        slides = presentation.Slides
+        slide_count = slides.Count
+        if slide_number < 1 or slide_number > slide_count:
+            raise IndexError(
+                f"Slide number {slide_number} is out of range. Presentation contains {slide_count} slides."
+            )
+        slide = slides.Item(slide_number)
+        try:
+            slide.Export(str(out_path), "PNG", int(width), int(height))
+        finally:
+            del slide
+        del slides
+    finally:
+        try:
+            presentation.Saved = -1
+            presentation.Close()
+        except Exception:
+            pass
+        del presentation
+        del presentations
+        try:
+            pythoncom.PumpWaitingMessages()
+        except Exception:
+            pass
+        gc.collect()
+
+
 def _com_export_slide(
     prs_path: Path, slide_number: int, out_path: Path, width: int, height: int
 ) -> None:
-    import win32com.client
+    from powerpoint_mcp.rendering.com_lifecycle import com_powerpoint_session
 
-    ppt_app = win32com.client.DispatchEx("PowerPoint.Application")
+    with com_powerpoint_session() as (app, _):
+        _render_slide_inner(app, prs_path, slide_number, out_path, width, height)
+        del app
+
+
+def _render_presentation_inner(
+    ppt_app: Any, prs_path: Path, out_dir: Path, width: int, height: int
+) -> List[str]:
+    import pythoncom
+
+    rendered_paths: List[str] = []
+    presentations = ppt_app.Presentations
+    # Open(FileName, ReadOnly=-1, Untitled=0, WithWindow=0)
+    presentation = presentations.Open(str(prs_path), -1, 0, 0)
     try:
-        presentation = ppt_app.Presentations.Open(str(prs_path), 1, 0, 0)
-        try:
-            slide_count = presentation.Slides.Count
-            if slide_number > slide_count:
-                raise IndexError(
-                    f"Slide number {slide_number} is out of range. Presentation contains {slide_count} slides."
-                )
-            slide = presentation.Slides(slide_number)
+        slides = presentation.Slides
+        slide_count = slides.Count
+        for idx in range(1, slide_count + 1):
+            slide_out = out_dir / f"slide_{idx}.png"
+            slide = slides.Item(idx)
             try:
-                slide.Export(str(out_path), "PNG", int(width), int(height))
+                slide.Export(str(slide_out), "PNG", int(width), int(height))
             finally:
                 del slide
-        finally:
-            presentation.Close()
-            del presentation
+            if not slide_out.exists() or slide_out.stat().st_size == 0:
+                raise RuntimeError(
+                    f"PowerPoint COM export failed for slide {idx} at: {slide_out}"
+                )
+            rendered_paths.append(str(slide_out))
+        del slides
     finally:
-        ppt_app.Quit()
-        del ppt_app
+        try:
+            presentation.Saved = -1
+            presentation.Close()
+        except Exception:
+            pass
+        del presentation
+        del presentations
+        try:
+            pythoncom.PumpWaitingMessages()
+        except Exception:
+            pass
+        gc.collect()
+    return rendered_paths
 
 
 def _com_export_presentation(
     prs_path: Path, out_dir: Path, width: int, height: int
 ) -> List[str]:
-    import win32com.client
+    from powerpoint_mcp.rendering.com_lifecycle import com_powerpoint_session
 
-    ppt_app = win32com.client.DispatchEx("PowerPoint.Application")
-    rendered_paths: List[str] = []
-    try:
-        presentation = ppt_app.Presentations.Open(str(prs_path), 1, 0, 0)
-        try:
-            slide_count = presentation.Slides.Count
-            for idx in range(1, slide_count + 1):
-                slide_out = out_dir / f"slide_{idx}.png"
-                slide = presentation.Slides(idx)
-                try:
-                    slide.Export(str(slide_out), "PNG", int(width), int(height))
-                finally:
-                    del slide
-                if not slide_out.exists() or slide_out.stat().st_size == 0:
-                    raise RuntimeError(
-                        f"PowerPoint COM export failed for slide {idx} at: {slide_out}"
-                    )
-                rendered_paths.append(str(slide_out))
-            return rendered_paths
-        finally:
-            presentation.Close()
-            del presentation
-    finally:
-        ppt_app.Quit()
-        del ppt_app
+    results: List[str] = []
+    with com_powerpoint_session() as (app, _):
+        results = _render_presentation_inner(app, prs_path, out_dir, width, height)
+        del app
+    return results
 
 
 class PowerPointRenderer(BaseRenderer):
@@ -187,20 +227,24 @@ class PowerPointRenderer(BaseRenderer):
         if slide_number < 1:
             raise IndexError(f"Slide number must be >= 1 (1-indexed), got {slide_number}")
 
+        from pptx import Presentation as PptxPresentation
+
+        try:
+            deck = PptxPresentation(str(prs_path))
+            total_slides = len(deck.slides)
+            if slide_number > total_slides:
+                raise IndexError(
+                    f"Slide number {slide_number} is out of range. Presentation contains {total_slides} slides."
+                )
+        except IndexError:
+            raise
+        except Exception:
+            pass
+
         out_path = Path(output_path).resolve()
         out_path.parent.mkdir(parents=True, exist_ok=True)
 
-        import pythoncom
-
-        pythoncom.CoInitialize()
-        try:
-            _com_export_slide(prs_path, slide_number, out_path, width, height)
-        finally:
-            gc.collect()
-            try:
-                pythoncom.CoUninitialize()
-            except Exception:
-                pass
+        _com_export_slide(prs_path, slide_number, out_path, width, height)
 
         if not out_path.exists() or out_path.stat().st_size == 0:
             raise RuntimeError(f"PowerPoint COM export failed to produce valid PNG at: {out_path}")
@@ -226,17 +270,7 @@ class PowerPointRenderer(BaseRenderer):
         out_dir = Path(output_dir).resolve()
         out_dir.mkdir(parents=True, exist_ok=True)
 
-        import pythoncom
-
-        pythoncom.CoInitialize()
-        try:
-            return _com_export_presentation(prs_path, out_dir, width, height)
-        finally:
-            gc.collect()
-            try:
-                pythoncom.CoUninitialize()
-            except Exception:
-                pass
+        return _com_export_presentation(prs_path, out_dir, width, height)
 
 
 class LibreOfficeRenderer(BaseRenderer):

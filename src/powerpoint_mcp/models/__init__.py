@@ -1,5 +1,6 @@
-﻿"""Data models and conversion utilities for PowerPoint MCP."""
+"""Data models and conversion utilities for PowerPoint MCP."""
 
+from powerpoint_mcp.models.component import ComponentModel, ComponentType
 from powerpoint_mcp.models.shape import (
     AlignmentType,
     BoundingBox,
@@ -31,6 +32,8 @@ from powerpoint_mcp.models.presentation import (
 __all__ = [
     "AlignmentType",
     "BoundingBox",
+    "ComponentModel",
+    "ComponentType",
     "DistributionMode",
     "EMU_PER_CM",
     "EMU_PER_INCH",
