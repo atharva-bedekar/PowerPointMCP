@@ -200,32 +200,63 @@ def com_powerpoint_session():
         yield ppt_app, spawned_pid
     finally:
         try:
-            pythoncom.PumpWaitingMessages()
-        except Exception:
-            pass
-
-        # Step 1: Force garbage collection to deallocate child COM proxies while server is alive
-        gc.collect()
-
-        # Step 2: Quit PowerPoint application if owned by MCP
-        if ppt_app is not None and is_owned:
             try:
-                ppt_app.Quit()
-            except Exception as exc:
-                logger.debug(f"Error during ppt_app.Quit(): {exc}")
-        ppt_app = None
+                pythoncom.PumpWaitingMessages()
+            except Exception:
+                pass
 
-        try:
-            pythoncom.PumpWaitingMessages()
-        except Exception:
-            pass
+            # Step 1: Force garbage collection to deallocate child COM proxies while server is alive
+            gc.collect()
 
-        # Step 3: Final garbage collection while apartment is active
-        gc.collect()
+            # Step 2: Quit PowerPoint application if owned by MCP
+            if ppt_app is not None and is_owned:
+                try:
+                    ppt_app.Quit()
+                except Exception as exc:
+                    logger.debug(f"Error during ppt_app.Quit(): {exc}")
 
-        # Step 4: Ensure process is completely terminated (allow graceful exit before hard kill)
-        if spawned_pid is not None and is_owned:
-            ensure_mcp_pid_closed(spawned_pid, timeout=3.0)
+            # Safely release ppt_app wrapper reference before waiting / killing.
+            # In Windows COM, releasing the proxy interface pointer while PowerPoint exits
+            # produces a first-chance RPC_E_DISCONNECTED (0x80010108) SEH signal which Windows
+            # handles internally. Temporarily suspend faulthandler to avoid spurious dumps.
+            fh_enabled = False
+            try:
+                import faulthandler
+                fh_enabled = faulthandler.is_enabled()
+                if fh_enabled:
+                    faulthandler.disable()
+            except Exception:
+                pass
+
+            try:
+                del ppt_app
+            except Exception:
+                pass
+            ppt_app = None
+
+            try:
+                pythoncom.PumpWaitingMessages()
+            except Exception:
+                pass
+
+            # Step 3: Final garbage collection while apartment is active
+            gc.collect()
+
+            if fh_enabled:
+                try:
+                    faulthandler.enable()
+                except Exception:
+                    pass
+
+            # Step 4: Ensure process is completely terminated (allow graceful exit before hard kill)
+            if spawned_pid is not None and is_owned:
+                ensure_mcp_pid_closed(spawned_pid, timeout=6.0)
+        finally:
+            # Step 5: Guarantee pythoncom.CoUninitialize in the outermost finally
+            try:
+                pythoncom.CoUninitialize()
+            except Exception:
+                pass
 
 
 def is_file_locked_error(exc: BaseException) -> bool:

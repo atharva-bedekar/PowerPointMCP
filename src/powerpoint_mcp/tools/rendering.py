@@ -36,6 +36,27 @@ def _resolve_presentation_path(presentation_path: Optional[str] = None) -> str:
     return target_path
 
 
+def _get_presentation_dimensions(target_path: str, dpi: int) -> tuple[int, int]:
+    """Dynamically derive slide dimensions in pixels from the presentation preserving exact aspect ratio.
+
+    Supports 16:9 widescreen, 4:3 standard, portrait, and custom slide geometries.
+    """
+    from pptx import Presentation
+    from powerpoint_mcp.models.shape import emu_to_inches
+
+    w_in, h_in = 13.333, 7.5
+    try:
+        prs = Presentation(target_path)
+        if prs.slide_width and prs.slide_height:
+            w_in = emu_to_inches(prs.slide_width)
+            h_in = emu_to_inches(prs.slide_height)
+    except Exception:
+        pass
+
+    width_px = int(round(w_in * dpi))
+    height_px = int(round(h_in * dpi))
+    return width_px, height_px
+
 
 def _render_pillow_fallback(
     presentation_path: str,
@@ -137,10 +158,8 @@ def ppt_render_slide(
 
     out_file.parent.mkdir(parents=True, exist_ok=True)
 
-    # Pixel dimensions scaled by DPI
-    # Standard 16:9 base: 13.333" x 7.5"
-    width_px = int(round(13.333 * dpi))
-    height_px = int(round(7.5 * dpi))
+    # Dynamically derive dimensions from presentation (preserves 16:9, 4:3, portrait, etc.)
+    width_px, height_px = _get_presentation_dimensions(target_path, dpi)
 
     import time
     t0 = time.perf_counter()
@@ -259,11 +278,16 @@ def ppt_render_slides(
             raise IndexError(f"Slide number must be >= 1, got {s_num}")
 
     renderer_inst = get_available_renderer(renderer)
-    width_px = int(round(13.333 * dpi))
-    height_px = int(round(7.5 * dpi))
+    width_px, height_px = _get_presentation_dimensions(target_path, dpi)
 
     rendered_map: Dict[int, str] = {}
-    if renderer_inst.is_available and hasattr(renderer_inst, "render_slides"):
+    if renderer.lower() in ("mock", "pillow"):
+        for s_num in slide_numbers:
+            out_file = out_dir_path / f"slide_{s_num}.png"
+            _render_pillow_fallback(target_path, s_num, out_file, width_px, height_px)
+            rendered_map[s_num] = str(out_file)
+        renderer_name = "mock"
+    elif renderer_inst.is_available and hasattr(renderer_inst, "render_slides"):
         try:
             rendered_map = renderer_inst.render_slides(
                 presentation_path=target_path,

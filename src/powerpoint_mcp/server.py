@@ -1,4 +1,4 @@
-"""PowerPoint MCP Server providing 19 tools and 3 resources for Antigravity."""
+"""PowerPoint MCP Server providing 53 tools and 3 resources for Antigravity."""
 
 from __future__ import annotations
 

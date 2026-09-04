@@ -1,4 +1,4 @@
-﻿"""Dedicated test suite for PowerPoint COM locking prevention, process isolation, and defensive retry behavior."""
+"""Dedicated test suite for PowerPoint COM locking prevention, process isolation, and defensive retry behavior."""
 
 import gc
 from pathlib import Path
@@ -63,6 +63,58 @@ class TestCOMLifecycleAndProcessIsolation:
         os_err32.winerror = 32
         assert is_file_locked_error(os_err32) is True
         assert is_file_locked_error(ValueError("Not a lock error")) is False
+
+    def test_com_session_invokes_couninitialize_in_outermost_finally(self):
+        """Verify pythoncom.CoUninitialize is always called in the outermost finally block."""
+        from unittest.mock import MagicMock, patch
+
+        if sys.platform != "win32":
+            pytest.skip("Windows only test")
+
+        import pythoncom
+        couninit_mock = MagicMock()
+        coinit_mock = MagicMock()
+
+        with patch.object(pythoncom, "CoInitialize", coinit_mock), \
+             patch.object(pythoncom, "CoUninitialize", couninit_mock), \
+             patch("win32com.client.DispatchEx") as dispatch_mock:
+            mock_app = MagicMock()
+            dispatch_mock.return_value = mock_app
+
+            # Scenario 1: Normal exit
+            with com_powerpoint_session() as (app, pid):
+                assert app == mock_app
+
+            assert couninit_mock.call_count == 1
+
+            # Scenario 2: Exception inside with block
+            couninit_mock.reset_mock()
+            with pytest.raises(RuntimeError, match="Inner error"):
+                with com_powerpoint_session() as (app, pid):
+                    raise RuntimeError("Inner error")
+
+            assert couninit_mock.call_count == 1
+
+    def test_com_session_handles_rpc_disconnect_during_quit(self):
+        """Verify com_powerpoint_session handles RPC_E_DISCONNECTED on ppt_app.Quit() gracefully."""
+        from unittest.mock import MagicMock, patch
+        import pywintypes
+
+        if sys.platform != "win32":
+            pytest.skip("Windows only test")
+
+        with patch("win32com.client.DispatchEx") as dispatch_mock, \
+             patch("powerpoint_mcp.rendering.com_lifecycle.get_powerpoint_pids", return_value={100}), \
+             patch("powerpoint_mcp.rendering.com_lifecycle.ensure_mcp_pid_closed"):
+            mock_app = MagicMock()
+            # Simulate RPC_E_DISCONNECTED (-2147417848 / 0x80010108)
+            mock_app.Quit.side_effect = pywintypes.com_error(-2147417848, "The object invoked has disconnected from its clients.", None, None)
+            dispatch_mock.return_value = mock_app
+
+            # Should not raise exception; should exit cleanly
+            with com_powerpoint_session() as (app, pid):
+                pass
+
 
     @pytest.mark.skipif(
         sys.platform != "win32" or not PowerPointRenderer().is_available,

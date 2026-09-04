@@ -247,11 +247,21 @@ def _check_val_02_clipping(
     slide_width_in: float,
     slide_height_in: float,
     tolerance_in: float = 0.05,
+    exclude_tables: bool = False,
 ) -> List[SlideIssue]:
     """VAL-02: Off-slide / boundary clipping (shape right > slide_width or bottom > slide_height or x < 0 or y < 0)."""
     issues: List[SlideIssue] = []
 
     for s in shapes:
+        if exclude_tables:
+            is_table = (
+                s.shape_type == ShapeType.TABLE
+                or getattr(s, "table_metadata", None) is not None
+                or s.semantic_role == SemanticRole.TABLE
+            )
+            if is_table:
+                continue
+
         b = s.bbox
         protrusions: Dict[str, float] = {}
 
@@ -791,9 +801,14 @@ def validate_slide(
     if active_rules is None or "VAL-01" in active_rules:
         all_issues.extend(_check_val_01_overlaps(shapes, effective_width, effective_height))
 
-    # VAL-02: Boundary Clipping
+    # VAL-02: Boundary Clipping (tables excluded when TABLE-01 is active to prevent duplicates)
     if active_rules is None or "VAL-02" in active_rules:
-        all_issues.extend(_check_val_02_clipping(shapes, effective_width, effective_height))
+        exclude_tables = (active_rules is None or "TABLE-01" in active_rules)
+        all_issues.extend(
+            _check_val_02_clipping(
+                shapes, effective_width, effective_height, exclude_tables=exclude_tables
+            )
+        )
 
     # VAL-03: Text Overflow
     if active_rules is None or "VAL-03" in active_rules:

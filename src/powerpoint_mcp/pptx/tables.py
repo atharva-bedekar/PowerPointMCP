@@ -1,4 +1,4 @@
-﻿"""Core operations for PowerPoint tables: inspection, cell mutation, geometry, styling, and cell merging."""
+"""Core operations for PowerPoint tables: inspection, cell mutation, geometry, styling, and cell merging."""
 
 from typing import Any, Dict, List, Optional, Tuple, Union
 import re
@@ -429,7 +429,7 @@ def _parse_cell_range(range_str: Optional[str], num_rows: int, num_cols: int) ->
 
 
 def _set_cell_border(cell: Any, side: str, color_hex: str, width_pt: float = 1.0) -> None:
-    """Set OpenXML border on a table cell for a specific side."""
+    """Set OpenXML border on a table cell for a specific side adhering strictly to CT_TableCellProperties schema order."""
     side_tags = {"left": "lnL", "right": "lnR", "top": "lnT", "bottom": "lnB"}
     tag = side_tags.get(side.lower())
     if not tag:
@@ -438,7 +438,7 @@ def _set_cell_border(cell: Any, side: str, color_hex: str, width_pt: float = 1.0
     w_emu = pt_to_emu(width_pt)
     tcPr = cell._tc.get_or_add_tcPr()
 
-    # Remove existing element if present
+    # Remove existing line element for this side if present
     for child in list(tcPr):
         if child.tag.endswith(tag):
             tcPr.remove(child)
@@ -448,7 +448,41 @@ def _set_cell_border(cell: Any, side: str, color_hex: str, width_pt: float = 1.0
         f'<a:solidFill><a:srgbClr val="{clean_color}"/></a:solidFill>'
         f'</a:{tag}>'
     )
-    tcPr.append(border_elem)
+
+    # In ISO/IEC 29500 CT_TableCellProperties sequence:
+    # lnL, lnR, lnT, lnB, lnTlToBr, lnBlToTr MUST precede cell3D, fill elements, and extension lists.
+    line_tag_order = {
+        "lnL": 0,
+        "lnR": 1,
+        "lnT": 2,
+        "lnB": 3,
+        "lnTlToBr": 4,
+        "lnBlToTr": 5,
+    }
+    post_line_tags = (
+        "cell3D",
+        "noFill",
+        "solidFill",
+        "gradFill",
+        "blipFill",
+        "pattFill",
+        "grpFill",
+        "prstTxWarp",
+        "extLst",
+    )
+
+    curr_tag_order = line_tag_order.get(tag, 0)
+    insert_idx = len(tcPr)
+    for idx, child in enumerate(tcPr):
+        local_name = child.tag.split("}")[-1] if "}" in child.tag else child.tag
+        if local_name in line_tag_order and line_tag_order[local_name] > curr_tag_order:
+            insert_idx = idx
+            break
+        if any(local_name == plt for plt in post_line_tags):
+            insert_idx = idx
+            break
+
+    tcPr.insert(insert_idx, border_elem)
 
 
 def style_table(

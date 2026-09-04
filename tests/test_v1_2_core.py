@@ -1,4 +1,4 @@
-﻿"""Comprehensive test suite for PowerPoint MCP v1.2 Core Editing & Reliability improvements.
+"""Comprehensive test suite for PowerPoint MCP v1.2 Core Editing & Reliability improvements.
 
 Covers:
 - Shape PATCH semantics & explicit zero rejection
@@ -411,21 +411,27 @@ def test_batch_modify_tables_multi_operation(table_prs):
 # =============================================================================
 
 def test_validate_slide_table_boundary_overflow(tmp_path):
-    """Verify TABLE-01 boundary overflow detection."""
+    """Verify TABLE-01 boundary overflow detection and ensure generic VAL-02 clipping is not duplicated for tables."""
     prs = Presentation()
     prs.slide_width = Inches(13.333)
     prs.slide_height = Inches(7.5)
     slide = prs.slides.add_slide(prs.slide_layouts[6])
     # Place table extending beyond slide bottom (top=6.5, height=2.0 -> bottom=8.5 > 7.5)
-    slide.shapes.add_table(2, 2, Inches(1.0), Inches(6.5), Inches(5.0), Inches(2.0))
+    tbl_shape = slide.shapes.add_table(2, 2, Inches(1.0), Inches(6.5), Inches(5.0), Inches(2.0))
     p = tmp_path / "overflow_deck.pptx"
     prs.save(str(p))
 
     val_res = ppt_validate_slide(slide_number=1, presentation_path=str(p))
-    table_issues = [i for i in val_res.get("issues", []) if i["rule_id"] == "TABLE-01"]
+    issues = val_res.get("issues", [])
+    table_issues = [i for i in issues if i["rule_id"] == "TABLE-01"]
+    val02_issues = [i for i in issues if i["rule_id"] == "VAL-02" and tbl_shape.shape_id in i.get("shape_ids", [])]
+
+    # TABLE-01 must be the canonical warning
     assert len(table_issues) >= 1
     assert "extends" in table_issues[0]["message"]
     assert "bottom" in table_issues[0]["message"]
+    # VAL-02 must be suppressed for the table shape to prevent duplicate reporting
+    assert len(val02_issues) == 0, "VAL-02 should not duplicate TABLE-01 for table boundaries"
 
 
 def test_validate_slides_multi_slide(tmp_path):
@@ -446,3 +452,78 @@ def test_validate_slides_multi_slide(tmp_path):
     assert res["success"] is True
     assert res["total_slides_validated"] == 2
     assert len(res["slides"]) == 2
+
+
+def test_table_border_ooxml_schema_ordering(table_prs):
+    """Verify _set_cell_border inserts line tags in valid CT_TableCellProperties sequence before solidFill."""
+    deck_path, tbl_id = table_prs
+
+    # Apply both fill and border
+    res = ppt_style_table(
+        slide_number=1,
+        table_shape_id=tbl_id,
+        range="0:0",
+        style={
+            "fill": "1E3A8A",
+            "borders": {"color": "FF0000", "width": 2.0, "sides": ["top", "left", "bottom", "right"]},
+        },
+        presentation_path=str(deck_path),
+    )
+    assert res["success"] is True
+
+    # Re-open deck and inspect raw XML of cell (0,0)
+    prs = Presentation(str(deck_path))
+    tbl = prs.slides[0].shapes[0].table
+    tcPr = tbl.cell(0, 0)._tc.tcPr
+
+    tags = [child.tag.split("}")[-1] if "}" in child.tag else child.tag for child in tcPr]
+    # Check that line tags precede solidFill
+    line_tags = ["lnL", "lnR", "lnT", "lnB"]
+    fill_index = tags.index("solidFill")
+    for lt in line_tags:
+        assert lt in tags
+        lt_index = tags.index(lt)
+        assert lt_index < fill_index, f"{lt} (idx {lt_index}) must precede solidFill (idx {fill_index}) in CT_TableCellProperties"
+
+
+def test_render_preserves_non_16_9_aspect_ratios(tmp_path):
+    """Verify slide rendering dynamically derives dimensions and preserves 4:3 and portrait aspect ratios."""
+    from powerpoint_mcp.tools.rendering import _get_presentation_dimensions, ppt_render_slide
+
+    # 1. Standard 4:3 slide (10.0" x 7.5")
+    prs_4_3 = Presentation()
+    prs_4_3.slide_width = Inches(10.0)
+    prs_4_3.slide_height = Inches(7.5)
+    s = prs_4_3.slides.add_slide(prs_4_3.slide_layouts[6])
+    s.shapes.add_shape(1, Inches(1.0), Inches(1.0), Inches(2.0), Inches(1.0))
+    p_4_3 = tmp_path / "deck_4_3.pptx"
+    prs_4_3.save(str(p_4_3))
+
+    w_4_3, h_4_3 = _get_presentation_dimensions(str(p_4_3), dpi=150)
+    assert w_4_3 == 1500  # 10.0 * 150
+    assert h_4_3 == 1125  # 7.5 * 150
+    assert round(w_4_3 / h_4_3, 3) == round(4.0 / 3.0, 3)
+
+    res_4_3 = ppt_render_slide(slide_number=1, renderer="mock", dpi=150, presentation_path=str(p_4_3))
+    assert res_4_3["success"] is True
+    assert res_4_3["width_px"] == 1500
+    assert res_4_3["height_px"] == 1125
+
+    # 2. Portrait slide (7.5" x 10.0")
+    prs_port = Presentation()
+    prs_port.slide_width = Inches(7.5)
+    prs_port.slide_height = Inches(10.0)
+    s_p = prs_port.slides.add_slide(prs_port.slide_layouts[6])
+    s_p.shapes.add_shape(1, Inches(1.0), Inches(1.0), Inches(2.0), Inches(1.0))
+    p_port = tmp_path / "deck_portrait.pptx"
+    prs_port.save(str(p_port))
+
+    w_p, h_p = _get_presentation_dimensions(str(p_port), dpi=150)
+    assert w_p == 1125  # 7.5 * 150
+    assert h_p == 1500  # 10.0 * 150
+    assert round(h_p / w_p, 3) == round(4.0 / 3.0, 3)
+
+    res_port = ppt_render_slide(slide_number=1, renderer="mock", dpi=150, presentation_path=str(p_port))
+    assert res_port["success"] is True
+    assert res_port["width_px"] == 1125
+    assert res_port["height_px"] == 1500
